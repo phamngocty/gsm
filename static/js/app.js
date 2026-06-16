@@ -719,7 +719,18 @@ const app = createApp({
             try {
                 const d = await gitCmd(selectedProject.value.id, 'tag_create', { name: tag, message: desc || `Release ${tag}` });
                 releaseResult.value = d;
-                if (d.success) { toast(`Đã tạo release ${tag}!`, 'success'); newReleaseTag.value = ''; newReleaseDesc.value = ''; await fetchReleases(); }
+                if (d.success) {
+                    toast(`Đã tạo release ${tag}!`, 'success');
+                    newReleaseTag.value = ''; newReleaseDesc.value = '';
+                    await fetchReleases();
+                    // Push tag to remote if available
+                    const hasRemote = remotes.value.length > 0;
+                    if (hasRemote && await confirm(`📤 Đẩy tag "${tag}" lên remote ngay bây giờ?\n(Nếu không, tag chỉ tồn tại ở local)`)) {
+                        const pushResult = await gitCmd(selectedProject.value.id, 'push_tag', { tag, remote: 'origin' });
+                        if (pushResult.success) toast(`✅ Tag ${tag} đã được đẩy lên remote!`, 'success');
+                        else toast('⚠️ Đẩy tag thất bại — bạn có thể thử lại sau', 'error');
+                    }
+                }
                 else toast('Tạo release thất bại', 'error');
             } catch (e) { releaseResult.value = { success: false, message: e.message }; }
         }
@@ -730,6 +741,15 @@ const app = createApp({
                 const d = await gitCmd(selectedProject.value.id, 'tag_delete', { name: tag });
                 releaseResult.value = d;
                 if (d.success) { toast('Đã xóa release', 'success'); await fetchReleases(); }
+            } catch (e) { releaseResult.value = { success: false, message: e.message }; }
+        }
+        async function pushReleaseTag(tag) {
+            releaseResult.value = null;
+            try {
+                const d = await gitCmd(selectedProject.value.id, 'push_tag', { tag, remote: 'origin' });
+                releaseResult.value = d;
+                if (d.success) toast(`✅ Tag ${tag} đã được đẩy lên remote!`, 'success');
+                else toast('⚠️ Đẩy tag thất bại', 'error');
             } catch (e) { releaseResult.value = { success: false, message: e.message }; }
         }
 
@@ -877,7 +897,7 @@ const app = createApp({
             newRemoteName, newRemoteUrl, creatingRemote,
             initGitLoading, initResult, isGitRepo, gitConnectionClass,
             showReleasesPanel, newReleaseTag, newReleaseDesc, releases, releaseResult,
-            fetchReleases, createRelease, deleteRelease,
+            fetchReleases, createRelease, deleteRelease, pushReleaseTag,
             graphData, graphRowHeight, selectedCommit, contextMenu, commitNodeClass, formatDateVerbose, showContextMenu, openFileInExplorer, checkoutCommit, fetchGraph, renderGraphSegments,
             showResetPanel, resetTarget, showResetConfirm, resetResult,
             resetToCommit, executeReset, confirmHardReset, confirmRevert,

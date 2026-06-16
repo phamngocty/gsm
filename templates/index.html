@@ -291,6 +291,12 @@
                         <button class="btn btn-primary btn-sm" @click="createRelease" :disabled="!newReleaseTag.trim()">🏷️ Tạo release</button>
                         <button class="btn btn-xs" @click="newReleaseTag = ''; newReleaseDesc = ''">✖ Hủy</button>
                     </div>
+                    <div v-if="remotes.length > 0" style="margin-top:6px;font-size:11px;color:var(--text-muted)">
+                        ⬆️ Tag sẽ được hỏi để đẩy lên remote sau khi tạo.
+                    </div>
+                    <div v-else style="margin-top:6px;font-size:11px;color:var(--text-muted)">
+                        📡 Chưa có remote — tag chỉ tồn tại ở local. Thêm remote để đẩy lên Gitea/GitHub.
+                    </div>
                 </div>
 
                 <!-- Releases list -->
@@ -300,6 +306,7 @@
                             <span class="release-tag">🏷️ [[ rel.name ]]</span>
                             <span class="release-commit" v-if="rel.full_hash">🔗 [[ rel.full_hash.substring(0,8) ]]</span>
                             <div style="flex:1"></div>
+                            <button class="btn btn-xs" @click="pushReleaseTag(rel.name)" title="Đẩy tag lên remote">⬆️</button>
                             <button class="btn btn-xs" @click="copyText('git checkout tags/' + rel.name)" title="Copy checkout command">📋</button>
                             <button class="btn btn-xs btn-danger" @click="deleteRelease(rel.name)" title="Xóa release">🗑</button>
                         </div>

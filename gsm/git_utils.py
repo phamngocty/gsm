@@ -196,6 +196,11 @@ def git_fetch(project_path: str, remote: str = "") -> dict:
     return _run_git_lines(args, cwd=project_path)
 
 
+def git_push_tag(project_path: str, tag: str, remote: str = "origin") -> dict:
+    """Push a specific tag to remote."""
+    return _run_git_lines(["push", remote, tag], cwd=project_path)
+
+
 def git_branch_list(project_path: str) -> list[dict]:
     result = []
     r = _run_git(["branch", "--all"], cwd=project_path)
