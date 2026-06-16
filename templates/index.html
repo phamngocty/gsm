@@ -19,7 +19,7 @@
 
 <div class="main-layout">
     <!-- Sidebar: Navigation -->
-    <aside class="sidebar">
+    <aside class="sidebar" :style="{ width: sidebarWidth + 'px' }">
         <div class="sidebar-header"><span class="sidebar-title">Điều hướng</span></div>
         <nav class="nav-tabs">
             <button class="nav-btn" :class="{ active: navTab === 'home' }" @click="goHome">🏠 Trang chủ</button>
@@ -28,6 +28,30 @@
             <button class="nav-btn" :class="{ active: navTab === 'gitea_browse' }" @click="navTab='gitea_browse';selectedProject=null;fetchDashboardGiteaRepos()">☕ Kho Gitea</button>
             <button class="nav-btn" :class="{ active: navTab === 'settings' }" @click="openSettings">⚙️ Cài đặt</button>
         </nav>
+        <!-- Compact graph in sidebar -->
+        <div v-if="selectedProject && isGitRepo && graphData.length > 0" class="sidebar-section sidebar-graph">
+            <div class="sidebar-section-title">🌳 GRAPH</div>
+            <div class="sidebar-graph-list">
+                <div v-for="(row, idx) in graphData.slice(0, 30)" :key="idx" class="sidebar-graph-row"
+                     @click="selectedCommit = row"
+                     :class="{ 'sidebar-graph-selected': selectedCommit && (selectedCommit.full_hash === row.full_hash || selectedCommit.hash === row.hash) }"
+                     :title="row.message">
+                    <svg width="60" height="16" class="sidebar-graph-svg">
+                        <template v-for="(seg, si) in renderGraphSegments(row.graph, idx)" :key="si">
+                            <line v-if="seg.type === 'vert'" :x1="seg.x - 4" y1="0" :x2="seg.x - 4" y2="16"
+                                  :stroke="seg.color" stroke-width="2" opacity="0.6"/>
+                            <line v-if="seg.type === 'slash'" :x1="seg.x1 - 4" y1="0" :x2="seg.x2 - 4" y2="16"
+                                  :stroke="seg.color" stroke-width="2" opacity="0.6"/>
+                            <line v-if="seg.type === 'backslash'" :x1="seg.x1 - 4" y1="0" :x2="seg.x2 - 4" y2="16"
+                                  :stroke="seg.color" stroke-width="2" opacity="0.6"/>
+                            <circle v-if="seg.type === 'node'" :cx="seg.x - 4" cy="8" r="3"
+                                    :fill="seg.color" stroke="white" stroke-width="1"/>
+                        </template>
+                    </svg>
+                    <span class="sidebar-graph-msg">[[ row.message ]]</span>
+                </div>
+            </div>
+        </div>
         <!-- Branch tree in sidebar -->
         <div v-if="selectedProject && isGitRepo && branches.length > 1" class="sidebar-section">
             <div class="sidebar-section-title">🌿 Nhánh</div>
@@ -46,6 +70,8 @@
         </div>
         <div class="sidebar-footer">[[ filteredProjects.length ]] dự án</div>
     </aside>
+    <!-- Sidebar resize handle -->
+    <div class="drag-handle drag-handle-v" @mousedown.prevent="startResizeSidebar"></div>
 
     <!-- Main Content -->
     <main class="content">
@@ -171,9 +197,22 @@
                         <span class="meta-item" v-if="!isGitRepo">⏳ Chưa có Git</span>
                         <span class="meta-item" v-else-if="gitConnectionClass === 'connected'">✅ Đã kết nối</span>
                     </div>
+                    <!-- Branch chips at top -->
+                    <div v-if="isGitRepo && branches.length > 1" class="branch-chips">
+                        <span class="branch-chip-label">🌿 Nhánh:</span>
+                        <span v-for="b in branches" :key="b.name"
+                              class="branch-chip"
+                              :class="{ 'branch-chip-current': b.current, 'branch-chip-remote': b.remote && !b.current }"
+                              @click="switchBranch(b.name)"
+                              :title="b.current ? 'Đang ở nhánh này' : (b.remote ? 'Remote: ' + b.name : 'Chuyển sang ' + b.name)">
+                            [[ b.name ]]
+                            <span v-if="b.current" class="branch-chip-check">✓</span>
+                        </span>
+                    </div>
                 </div>
                 <div class="repo-header-actions">
                     <button class="btn btn-primary" @click="openInFork" :disabled="!settings.fork_path">🔓 Fork</button>
+                    <button class="btn btn-secondary" @click="createPullRequest" :disabled="!selectedProject.github_remote && !selectedProject.gitea_remote" title="Tạo Pull Request trên GitHub/Gitea">🔀 Tạo PR</button>
                     <button class="btn btn-danger" @click="deleteProject">🗑 Xóa</button>
                 </div>
             </div>
@@ -274,6 +313,7 @@
                             <button class="btn btn-xs" @click="switchBranch(b.name)" :disabled="b.current">🔀 Chuyển</button>
                             <button class="btn btn-xs" @click="deleteBranch(b.name)" :disabled="b.current || b.remote">🗑 Xóa</button>
                             <button class="btn btn-xs" @click="mergeBranchInto(b.name)" :disabled="b.current || b.remote" title="Merge vào nhánh hiện tại">🔗 Merge</button>
+                            <button class="btn btn-xs" @click="rebaseBranch(b.name)" :disabled="b.current || b.remote" title="Rebase nhánh này lên nhánh hiện tại (⚠️ nguy hiểm)">🔃 Rebase</button>
                         </td>
                     </tr></tbody>
                 </table>
@@ -403,7 +443,7 @@
             <!-- GitKraken-style: File Tree + Graph + Changes -->
             <div v-if="isGitRepo" class="repo-content">
                 <!-- File tree sidebar -->
-                <div class="file-tree-panel">
+                <div class="file-tree-panel" :style="{ width: treeWidth + 'px' }">
                     <div class="file-tree-header">
                         <span>📂 Thư mục</span>
                         <span class="file-tree-count" v-if="fileTree.length">[[ fileTree.length ]] files</span>
@@ -433,6 +473,8 @@
                         <div v-if="fileTree.length === 0" class="file-tree-empty">(empty repo)</div>
                     </div>
                 </div>
+                <!-- Tree resize handle -->
+                <div class="drag-handle drag-handle-v" @mousedown.prevent="startResizeTree"></div>
 
                 <!-- Content area -->
                 <div class="file-content-panel">
@@ -524,6 +566,7 @@
                                     <td>
                                         <button class="btn btn-xs" @click="viewDiff(file.path)" title="Xem diff">📄</button>
                                         <button class="btn btn-xs" @click="openFileInExplorer(file.path)" title="Mở file">📂</button>
+                                        <button class="btn btn-xs" @click="blameFile(file.path)" title="Blame file">🔍</button>
                                     </td>
                                 </tr></tbody>
                             </table>

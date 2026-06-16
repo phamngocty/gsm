@@ -66,7 +66,7 @@ body { font-family: var(--font); background: var(--bg-primary); color: var(--tex
 .main-layout { display: flex; height: calc(100vh - 56px); }
 
 /* ─── Sidebar Navigation ─── */
-.sidebar { width: 200px; min-width: 200px; background: var(--bg-secondary); border-right: 1px solid var(--border); display: flex; flex-direction: column; overflow: hidden; }
+.sidebar { width: 200px; min-width: 140px; background: var(--bg-secondary); border-right: 1px solid var(--border); display: flex; flex-direction: column; overflow: hidden; flex-shrink: 0; }
 .sidebar-header { padding: 14px 16px; border-bottom: 1px solid var(--border); }
 .sidebar-title { font-weight: 600; font-size: 12px; text-transform: uppercase; letter-spacing: 0.5px; color: var(--text-muted); }
 .nav-tabs { display: flex; flex-direction: column; gap: 2px; padding: 8px; }
@@ -186,7 +186,7 @@ body { font-family: var(--font); background: var(--bg-primary); color: var(--tex
 .repo-content { display: flex; gap: 0; border: 1px solid var(--border); border-radius: var(--radius-lg); overflow: hidden; margin-top: 12px; }
 
 /* File Tree Panel */
-.file-tree-panel { width: 300px; min-width: 220px; background: var(--bg-secondary); border-right: 1px solid var(--border); display: flex; flex-direction: column; max-height: 500px; overflow: hidden; }
+.file-tree-panel { width: 280px; min-width: 120px; background: var(--bg-secondary); border-right: 1px solid var(--border); display: flex; flex-direction: column; max-height: 500px; overflow: hidden; flex-shrink: 0; }
 .file-tree-header { display: flex; align-items: center; justify-content: space-between; padding: 10px 12px; font-weight: 600; font-size: 12px; text-transform: uppercase; letter-spacing: 0.5px; color: var(--text-muted); border-bottom: 1px solid var(--border); }
 .file-tree-count { font-size: 11px; font-weight: 400; opacity: 0.6; }
 .file-tree-loading { padding: 20px; text-align: center; color: var(--text-muted); }
@@ -226,6 +226,14 @@ body { font-family: var(--font); background: var(--bg-primary); color: var(--tex
 .diff-header { display: flex; align-items: center; justify-content: space-between; padding: 8px 12px; background: var(--bg-surface); border-bottom: 1px solid var(--border); }
 .diff-header h4 { margin: 0; font-size: 13px; }
 .diff-content { font-family: var(--mono); font-size: 12px; line-height: 1.5; padding: 12px; max-height: 300px; overflow-y: auto; background: var(--bg-primary); color: var(--text-primary); white-space: pre; margin: 0; }
+
+/* ─── Drag Handles ─── */
+.drag-handle { flex-shrink: 0; z-index: 10; }
+.drag-handle-v { width: 4px; cursor: col-resize; background: transparent; transition: background 0.15s; position: relative; }
+.drag-handle-v:hover { background: var(--accent); }
+.drag-handle-v::after { content: ''; position: absolute; top: 0; bottom: 0; left: -3px; right: -3px; }
+/* When actively resizing, show a full-height indicator */
+body.resizing-sidebar .drag-handle-v { background: var(--accent); opacity: 0.5; }
 
 /* ─── File Table ─── */
 .file-table { width: 100%; border-collapse: collapse; font-size: 13px; }
@@ -320,6 +328,26 @@ body { font-family: var(--font); background: var(--bg-primary); color: var(--tex
 .current-badge { display: inline-block; padding: 1px 6px; border-radius: 3px; font-size: 10px; background: rgba(124,92,252,0.2); color: var(--accent); margin-right: 4px; }
 .remote-badge { display: inline-block; padding: 1px 6px; border-radius: 3px; font-size: 10px; background: rgba(96,165,250,0.15); color: #60a5fa; margin-left: 4px; }
 .branch-current { font-weight: 600; color: var(--accent); }
+
+/* ─── Branch chips (at top) ─── */
+.branch-chips { display: flex; flex-wrap: wrap; gap: 4px; align-items: center; margin-top: 8px; padding: 6px 0; }
+.branch-chip-label { font-size: 11px; color: var(--text-muted); margin-right: 4px; white-space: nowrap; }
+.branch-chip { display: inline-flex; align-items: center; gap: 4px; padding: 3px 10px; border-radius: 12px; font-size: 12px; font-family: var(--mono); cursor: pointer; border: 1px solid var(--border); background: var(--bg-surface); color: var(--text-secondary); transition: all 0.15s; white-space: nowrap; }
+.branch-chip:hover { border-color: var(--accent); background: var(--bg-hover); color: var(--text-primary); }
+.branch-chip-current { border-color: var(--accent); background: rgba(124,92,252,0.15); color: var(--accent); font-weight: 600; cursor: default; }
+.branch-chip-remote { border-color: rgba(96,165,250,0.3); color: #60a5fa; }
+.branch-chip-check { font-size: 10px; color: var(--accent); }
+
+/* ─── Sidebar section for mini graph ─── */
+.sidebar-section { border-top: 1px solid var(--border); padding: 8px; flex: 1; overflow: hidden; display: flex; flex-direction: column; min-height: 0; }
+.sidebar-section-title { font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px; color: var(--text-muted); padding: 4px 8px 6px; }
+.sidebar-graph { flex: 1; min-height: 40px; }
+.sidebar-graph-list { flex: 1; overflow-y: auto; display: flex; flex-direction: column; gap: 0; }
+.sidebar-graph-row { display: flex; align-items: center; gap: 4px; padding: 1px 4px; border-radius: 2px; cursor: pointer; transition: background 0.08s; min-height: 16px; }
+.sidebar-graph-row:hover { background: var(--bg-hover); }
+.sidebar-graph-selected { background: rgba(124,92,252,0.12); }
+.sidebar-graph-svg { flex-shrink: 0; display: block; }
+.sidebar-graph-msg { font-size: 9px; color: var(--text-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; }
 
 /* ═══════════════════════════════════════════════════════════════════════════
    GIT GRAPH (GitKraken-style)
