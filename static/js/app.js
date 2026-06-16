@@ -18,6 +18,12 @@ const app = createApp({
         const searchQuery = ref('');
         const selectedBranch = ref('');
 
+        // Resizable panel widths
+        const sidebarWidth = ref(200);
+        const treeWidth = ref(280);
+        const isResizingSidebar = ref(false);
+        const isResizingTree = ref(false);
+
         // Project data
         const projectStatus = ref({ branch: '?', files: [], ahead: 0, behind: 0, has_conflict: false });
         const recentCommits = ref([]);
@@ -289,6 +295,51 @@ const app = createApp({
         function statusRowClass(status) { return status === 'Conflict' ? 'conflict-row' : ''; }
         function isStaged(status) { return ['Staged', 'Staged+Modified', 'Added'].includes(status); }
         function formatDate(iso) { return iso ? iso.split('T')[0] : ''; }
+
+        // ── Resizable panels ──
+        function startResizeSidebar(e) {
+            isResizingSidebar.value = true;
+            document.body.style.cursor = 'col-resize';
+            document.body.style.userSelect = 'none';
+            const startX = e.clientX;
+            const startW = sidebarWidth.value;
+            function onMove(ev) {
+                const delta = ev.clientX - startX;
+                const newW = Math.max(140, Math.min(400, startW + delta));
+                sidebarWidth.value = newW;
+            }
+            function onUp() {
+                isResizingSidebar.value = false;
+                document.body.style.cursor = '';
+                document.body.style.userSelect = '';
+                document.removeEventListener('mousemove', onMove);
+                document.removeEventListener('mouseup', onUp);
+            }
+            document.addEventListener('mousemove', onMove);
+            document.addEventListener('mouseup', onUp);
+        }
+
+        function startResizeTree(e) {
+            isResizingTree.value = true;
+            document.body.style.cursor = 'col-resize';
+            document.body.style.userSelect = 'none';
+            const startX = e.clientX;
+            const startW = treeWidth.value;
+            function onMove(ev) {
+                const delta = ev.clientX - startX;
+                const newW = Math.max(120, Math.min(500, startW + delta));
+                treeWidth.value = newW;
+            }
+            function onUp() {
+                isResizingTree.value = false;
+                document.body.style.cursor = '';
+                document.body.style.userSelect = '';
+                document.removeEventListener('mousemove', onMove);
+                document.removeEventListener('mouseup', onUp);
+            }
+            document.addEventListener('mousemove', onMove);
+            document.addEventListener('mouseup', onUp);
+        }
 
         // ── Error Analysis ──
         function analyzeGitError(result) {
@@ -831,6 +882,8 @@ const app = createApp({
             showReleasesPanel, newReleaseTag, newReleaseDesc, releases, releaseResult,
             fetchReleases, createRelease, deleteRelease,
             graphData, graphRowHeight, selectedCommit, contextMenu, commitNodeClass, formatDateVerbose, showContextMenu, openFileInExplorer, checkoutCommit, fetchGraph, renderGraphSegments,
+            sidebarWidth, treeWidth, isResizingSidebar, isResizingTree,
+            startResizeSidebar, startResizeTree,
             showResetPanel, resetTarget, showResetConfirm, resetResult,
             resetToCommit, executeReset, confirmHardReset, confirmRevert,
             diffContent, diffFile,
