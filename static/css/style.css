@@ -69,10 +69,22 @@ body { font-family: var(--font); background: var(--bg-primary); color: var(--tex
 .sidebar { width: 200px; min-width: 200px; background: var(--bg-secondary); border-right: 1px solid var(--border); display: flex; flex-direction: column; overflow: hidden; }
 .sidebar-header { padding: 14px 16px; border-bottom: 1px solid var(--border); }
 .sidebar-title { font-weight: 600; font-size: 12px; text-transform: uppercase; letter-spacing: 0.5px; color: var(--text-muted); }
-.nav-tabs { display: flex; flex-direction: column; gap: 2px; padding: 8px; flex: 1; overflow-y: auto; }
+.nav-tabs { display: flex; flex-direction: column; gap: 2px; padding: 8px; }
 .nav-btn { display: flex; align-items: center; gap: 8px; padding: 10px 12px; border: none; border-radius: var(--radius); background: none; color: var(--text-secondary); cursor: pointer; font-size: 13px; font-weight: 500; text-align: left; transition: all 0.15s; width: 100%; }
 .nav-btn:hover { background: var(--bg-hover); color: var(--text-primary); }
 .nav-btn.active { background: var(--bg-surface); color: var(--accent); border: 1px solid var(--border); }
+
+/* Sidebar section for branch tree */
+.sidebar-section { border-top: 1px solid var(--border); padding: 8px; flex: 1; overflow: hidden; display: flex; flex-direction: column; min-height: 0; }
+.sidebar-section-title { font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px; color: var(--text-muted); padding: 4px 8px 6px; }
+.sidebar-branch-list { flex: 1; overflow-y: auto; display: flex; flex-direction: column; gap: 1px; }
+.sidebar-branch-item { display: flex; align-items: center; gap: 6px; padding: 5px 8px; border-radius: var(--radius); cursor: pointer; font-size: 12px; color: var(--text-secondary); transition: all 0.12s; }
+.sidebar-branch-item:hover { background: var(--bg-hover); color: var(--text-primary); }
+.sidebar-branch-current { background: rgba(124,92,252,0.12); color: var(--accent); font-weight: 600; }
+.sidebar-branch-remote { color: #60a5fa; opacity: 0.8; }
+.sidebar-branch-icon { font-size: 10px; width: 14px; text-align: center; flex-shrink: 0; }
+.sidebar-branch-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
 .sidebar-footer { padding: 10px 16px; border-top: 1px solid var(--border); font-size: 11px; color: var(--text-muted); }
 
 /* ─── Content ─── */
@@ -308,15 +320,6 @@ body { font-family: var(--font); background: var(--bg-primary); color: var(--tex
 .current-badge { display: inline-block; padding: 1px 6px; border-radius: 3px; font-size: 10px; background: rgba(124,92,252,0.2); color: var(--accent); margin-right: 4px; }
 .remote-badge { display: inline-block; padding: 1px 6px; border-radius: 3px; font-size: 10px; background: rgba(96,165,250,0.15); color: #60a5fa; margin-left: 4px; }
 .branch-current { font-weight: 600; color: var(--accent); }
-
-/* ─── Branch chips (quick switcher) ─── */
-.branch-chips { display: flex; flex-wrap: wrap; gap: 4px; align-items: center; margin-top: 8px; padding: 6px 0; }
-.branch-chip-label { font-size: 11px; color: var(--text-muted); margin-right: 4px; white-space: nowrap; }
-.branch-chip { display: inline-flex; align-items: center; gap: 4px; padding: 3px 10px; border-radius: 12px; font-size: 12px; font-family: var(--mono); cursor: pointer; border: 1px solid var(--border); background: var(--bg-surface); color: var(--text-secondary); transition: all 0.15s; white-space: nowrap; }
-.branch-chip:hover { border-color: var(--accent); background: var(--bg-hover); color: var(--text-primary); }
-.branch-chip-current { border-color: var(--accent); background: rgba(124,92,252,0.15); color: var(--accent); font-weight: 600; cursor: default; }
-.branch-chip-remote { border-color: rgba(96,165,250,0.3); color: #60a5fa; }
-.branch-chip-check { font-size: 10px; color: var(--accent); }
 
 /* ═══════════════════════════════════════════════════════════════════════════
    GIT GRAPH (GitKraken-style)
