@@ -1,0 +1,55 @@
+<!-- Add Project Modal -->
+<div class="modal-overlay" :class="{ visible: showAddModal }" @click.self="closeAddModal">
+    <div class="modal">
+        <div class="modal-header">
+            <h2>📥 Thêm dự án mới</h2>
+            <button class="btn-close" @click="closeAddModal">✖</button>
+        </div>
+        <div class="tabs">
+            <button class="tab" :class="{ active: addTab === 'clone' }" @click="addTab = 'clone'">Clone từ URL</button>
+            <button class="tab" :class="{ active: addTab === 'create' }" @click="addTab = 'create'">Tạo repo mới</button>
+            <button class="tab" :class="{ active: addTab === 'gitea' }" @click="openGiteaTab">Từ kho Gitea</button>
+        </div>
+        <div v-if="addTab === 'clone'" class="tab-content">
+            <div class="form-group"><label>URL Clone</label><input type="text" v-model="cloneForm.url" class="form-input" placeholder="https://github.com/user/repo.git"></div>
+            <div class="form-group">
+                <label>Thư mục đích</label>
+                <div class="input-row"><input type="text" v-model="cloneForm.targetDir" class="form-input" placeholder="C:\Projects\"><button class="btn btn-secondary" @click="browseDir('clone')">Browse...</button></div>
+            </div>
+            <button class="btn btn-primary btn-full" @click="submitClone" :disabled="cloning">[[ cloning ? '📥 Đang clone...' : '📥 Clone' ]]</button>
+            <div v-if="cloneProgress" class="progress-box"><pre>[[ cloneProgress ]]</pre></div>
+        </div>
+        <div v-if="addTab === 'create'" class="tab-content">
+            <div class="form-group"><label>Tên repo *</label><input type="text" v-model="createForm.name" class="form-input" placeholder="my-repo"></div>
+            <div class="form-group"><label>Mô tả</label><input type="text" v-model="createForm.description" class="form-input" placeholder="Mô tả ngắn..."></div>
+            <div class="form-group"><label>Chế độ</label><select v-model="createForm.private" class="form-input"><option :value="false">Public</option><option :value="true">Private</option></select></div>
+            <div class="form-group">
+                <label class="checkbox-label"><input type="checkbox" v-model="createForm.github" checked> Tạo trên GitHub</label>
+                <label class="checkbox-label"><input type="checkbox" v-model="createForm.gitea" checked> Tạo trên Gitea</label>
+            </div>
+            <div class="form-group">
+                <label>Thư mục đích</label>
+                <div class="input-row"><input type="text" v-model="createForm.targetDir" class="form-input" placeholder="C:\Projects\"><button class="btn btn-secondary" @click="browseDir('create')">Browse...</button></div>
+            </div>
+            <button class="btn btn-primary btn-full" @click="submitCreate" :disabled="creating">[[ creating ? '🚀 Đang tạo...' : '🚀 Tạo và Clone' ]]</button>
+            <div v-if="createProgress" class="progress-box"><pre>[[ createProgress ]]</pre></div>
+        </div>
+        <div v-if="addTab === 'gitea'" class="tab-content">
+            <div class="form-group">
+                <label>Thư mục đích</label>
+                <div class="input-row"><input type="text" v-model="giteaImport.targetDir" class="form-input" placeholder="C:\Projects\"><button class="btn btn-secondary" @click="browseDir('gitea')">Browse...</button></div>
+            </div>
+            <div v-if="giteaLoading" class="loading-box">⏳ Đang tải...</div>
+            <div v-else-if="giteaError" class="error-box">❌ [[ giteaError ]]<button class="btn btn-secondary" @click="fetchGiteaRepos">🔄 Thử lại</button></div>
+            <div v-else-if="giteaRepos.length === 0" class="empty-box">Không có repo nào.</div>
+            <div v-else class="gitea-repo-list">
+                <div class="repo-list-header"><span class="repo-count">[[ giteaRepos.length ]] repo</span><button class="btn btn-secondary btn-sm" @click="fetchGiteaRepos">🔄</button></div>
+                <div v-for="repo in giteaRepos" :key="repo.id" class="gitea-repo-item">
+                    <div class="repo-info"><span class="repo-name">📁 [[ repo.name ]]</span><span class="repo-branch">🌿 [[ repo.default_branch ]]</span></div>
+                    <div class="repo-meta"><span class="repo-url mono">[[ repo.clone_url ]]</span></div>
+                    <button class="btn btn-primary btn-sm" @click="importGiteaRepo(repo)" :disabled="giteaImporting === repo.id">[[ giteaImporting === repo.id ? '⏳...' : '📥 Clone' ]]</button>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>

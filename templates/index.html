@@ -1,0 +1,352 @@
+{% extends "base.html" %}
+
+{% block content %}
+<!-- Top Bar -->
+<header class="topbar">
+    <div class="topbar-left">
+        <span class="logo">◆</span>
+        <h1 class="app-title">{{ app_name }}</h1>
+        <span v-if="selectedProject" class="current-branch">🌿 [[ selectedBranch ]]</span>
+    </div>
+    <div class="topbar-center">
+        <input type="text" class="search-input" v-model="searchQuery" placeholder="🔍 Tìm kiếm..." @input="filterProjects">
+    </div>
+    <div class="topbar-right">
+        <button class="btn btn-icon" @click="refreshAll" title="Làm mới">⟳</button>
+        <button class="btn btn-icon" @click="openSettings" title="Cài đặt">⚙</button>
+    </div>
+</header>
+
+<div class="main-layout">
+    <!-- Sidebar: Navigation -->
+    <aside class="sidebar">
+        <div class="sidebar-header"><span class="sidebar-title">Điều hướng</span></div>
+        <nav class="nav-tabs">
+            <button class="nav-btn" :class="{ active: navTab === 'home' }" @click="goHome">🏠 Trang chủ</button>
+            <button class="nav-btn" :class="{ active: navTab === 'clone' }" @click="navTab='clone';selectedProject=null">📥 Clone</button>
+            <button class="nav-btn" :class="{ active: navTab === 'create' }" @click="navTab='create';selectedProject=null">➕ Tạo repo</button>
+            <button class="nav-btn" :class="{ active: navTab === 'gitea_browse' }" @click="navTab='gitea_browse';selectedProject=null;fetchDashboardGiteaRepos()">☕ Kho Gitea</button>
+            <button class="nav-btn" :class="{ active: navTab === 'settings' }" @click="openSettings">⚙️ Cài đặt</button>
+        </nav>
+        <div class="sidebar-footer">[[ filteredProjects.length ]] dự án</div>
+    </aside>
+
+    <!-- Main Content -->
+    <main class="content">
+
+        <!-- ═══════ HOME (dashboard) ═══════ -->
+        <div v-if="navTab === 'home' && !selectedProject" class="dashboard">
+            <div class="dashboard-header">
+                <h2>🏠 Trang chủ</h2>
+                <div class="dashboard-actions">
+                    <button class="btn btn-secondary" @click="selectWorkingDir">📂 Mở thư mục</button>
+                    <button class="btn btn-primary" @click="openAddModal">＋ Thêm</button>
+                </div>
+            </div>
+            <div v-if="filteredProjects.length === 0 && giteaRepos.length === 0" class="welcome-screen">
+                <div class="welcome-icon">◆</div>
+                <h2>Chào mừng!</h2>
+                <p>Mở thư mục dự án hoặc clone repository để bắt đầu.</p>
+                <div class="welcome-actions">
+                    <button class="btn btn-primary btn-lg" @click="selectWorkingDir">📂 Mở thư mục</button>
+                    <button class="btn btn-secondary btn-lg" @click="navTab='clone'">📥 Clone repo</button>
+                </div>
+            </div>
+            <div v-if="filteredProjects.length > 0" class="section">
+                <div class="section-header"><h3>📁 Dự án local</h3><span class="project-count-badge">[[ filteredProjects.length ]]</span></div>
+                <div class="repo-grid">
+                    <div v-for="proj in filteredProjects" :key="proj.id" class="repo-card" @click="selectProject(proj)">
+                        <div class="repo-card-header">
+                            <span class="status-dot-lg" :class="statusClass(proj)"></span>
+                            <span class="repo-card-name">[[ proj.name ]]</span>
+                        </div>
+                        <div class="repo-card-path mono">[[ proj.path ]]</div>
+                        <div class="repo-card-remotes">
+                            <span v-if="proj.github_remote" class="remote-tag github">GitHub</span>
+                            <span v-if="proj.gitea_remote" class="remote-tag gitea">Gitea</span>
+                            <span v-if="!proj.github_remote && !proj.gitea_remote" class="remote-tag local">Local</span>
+                        </div>
+                        <div class="repo-card-footer">
+                            <span class="repo-card-branch" v-if="proj.status_summary">🌿 [[ proj.status_summary.branch ]]</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            <div v-if="giteaRepos.length > 0" class="section" style="margin-top:16px">
+                <div class="section-header"><h3>☕ Kho Gitea</h3><button class="btn btn-secondary btn-sm" @click="fetchDashboardGiteaRepos">🔄</button></div>
+                <div class="repo-grid">
+                    <div v-for="repo in giteaRepos" :key="repo.id" class="repo-card repo-card-remote">
+                        <div class="repo-card-header"><span class="status-dot-lg unknown"></span><span class="repo-card-name">📦 [[ repo.name ]]</span></div>
+                        <div class="repo-card-path mono">[[ repo.clone_url ]]</div>
+                        <div class="repo-card-remotes">
+                            <span class="remote-tag gitea">Gitea</span>
+                            <span v-if="repo.private" class="repo-badge private">🔒 Private</span>
+                            <span v-else class="repo-badge public">🌐 Public</span>
+                        </div>
+                        <div class="repo-card-footer">
+                            <span class="repo-card-branch">🌿 [[ repo.default_branch ]]</span>
+                            <button class="btn btn-primary btn-sm" @click.stop="cloneGiteaRepo(repo)" :disabled="giteaImporting === repo.id">[[ giteaImporting === repo.id ? '⏳...' : '📥 Clone' ]]</button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- ═══════ CLONE TAB ═══════ -->
+        <div v-if="navTab === 'clone' && !selectedProject" class="dashboard">
+            <div class="dashboard-header"><h2>📥 Clone repository</h2></div>
+            <div class="panel" style="max-width:600px">
+                <div class="form-group"><label>URL Clone</label><input type="text" v-model="cloneForm.url" class="form-input" placeholder="https://github.com/user/repo.git"></div>
+                <div class="form-group"><label>Thư mục đích</label><div class="input-row"><input type="text" v-model="cloneForm.targetDir" class="form-input" placeholder="C:\Projects\"><button class="btn btn-secondary" @click="browseDir('clone')">Browse...</button></div></div>
+                <button class="btn btn-primary btn-full" @click="submitClone" :disabled="cloning">[[ cloning ? '⏳...' : '📥 Clone' ]]</button>
+                <div v-if="cloneProgress" class="progress-box"><pre>[[ cloneProgress ]]</pre></div>
+            </div>
+        </div>
+
+        <!-- ═══════ CREATE TAB ═══════ -->
+        <div v-if="navTab === 'create' && !selectedProject" class="dashboard">
+            <div class="dashboard-header"><h2>➕ Tạo repository mới</h2></div>
+            <div class="panel" style="max-width:600px">
+                <div class="form-group"><label>Tên repo *</label><input type="text" v-model="createForm.name" class="form-input" placeholder="my-repo"></div>
+                <div class="form-group"><label>Mô tả</label><input type="text" v-model="createForm.description" class="form-input"></div>
+                <div class="form-group"><label>Chế độ</label><select v-model="createForm.private" class="form-input"><option :value="false">Public</option><option :value="true">Private</option></select></div>
+                <div class="form-group"><label class="checkbox-label"><input type="checkbox" v-model="createForm.github" checked> Tạo trên GitHub</label><label class="checkbox-label"><input type="checkbox" v-model="createForm.gitea" checked> Tạo trên Gitea</label></div>
+                <div class="form-group"><label>Thư mục đích</label><div class="input-row"><input type="text" v-model="createForm.targetDir" class="form-input" placeholder="C:\Projects\"><button class="btn btn-secondary" @click="browseDir('create')">Browse...</button></div></div>
+                <button class="btn btn-primary btn-full" @click="submitCreate" :disabled="creating">[[ creating ? '⏳...' : '🚀 Tạo và Clone' ]]</button>
+                <div v-if="createProgress" class="progress-box"><pre>[[ createProgress ]]</pre></div>
+            </div>
+        </div>
+
+        <!-- ═══════ GITEA BROWSE ═══════ -->
+        <div v-if="navTab === 'gitea_browse' && !selectedProject" class="dashboard">
+            <div class="dashboard-header"><h2>☕ Kho Gitea</h2><button class="btn btn-secondary btn-sm" @click="fetchDashboardGiteaRepos">🔄</button></div>
+            <div v-if="giteaLoading" class="status-clean">⏳ Đang tải...</div>
+            <div v-else-if="giteaRepos.length === 0" class="status-clean">Không có repo.</div>
+            <div v-else class="repo-grid">
+                <div v-for="repo in giteaRepos" :key="repo.id" class="repo-card repo-card-remote">
+                    <div class="repo-card-header"><span class="status-dot-lg unknown"></span><span class="repo-card-name">📦 [[ repo.name ]]</span></div>
+                    <div class="repo-card-path mono">[[ repo.clone_url ]]</div>
+                    <div class="repo-card-remotes"><span class="remote-tag gitea">Gitea</span><span v-if="repo.private" class="repo-badge private">🔒</span><span v-else class="repo-badge public">🌐</span></div>
+                    <div class="repo-card-footer"><span class="repo-card-branch">🌿 [[ repo.default_branch ]]</span><button class="btn btn-primary btn-sm" @click="cloneGiteaRepo(repo)" :disabled="giteaImporting === repo.id">📥 Clone</button></div>
+                </div>
+            </div>
+        </div>
+
+        <!-- ═══════ WORKSPACE (GitHub-like) ═══════ -->
+        <div v-if="selectedProject" class="workspace">
+            <!-- Breadcrumb + Branch selector -->
+            <div class="breadcrumb">
+                <button class="btn btn-link" @click="goHome">← Trang chủ</button>
+                <span class="sep">/</span>
+                <strong>[[ selectedProject.name ]]</strong>
+                <span class="sep" v-if="selectedBranch">/</span>
+                <span v-if="selectedBranch" class="mono current-file-path">[[ selectedBranch ]]</span>
+            </div>
+
+            <!-- GitHub-style repo header -->
+            <div class="repo-header">
+                <div class="repo-header-left">
+                    <h2>📁 [[ selectedProject.name ]]</h2>
+                    <div class="repo-meta-strip">
+                        <span class="meta-item" v-if="projectStatus.branch && projectStatus.branch !== '?'">🌿 <strong>[[ projectStatus.branch ]]</strong></span>
+                        <span class="meta-item" v-if="projectStatus.ahead > 0">⬆️ <strong>[[ projectStatus.ahead ]]</strong> ahead</span>
+                        <span class="meta-item" v-if="projectStatus.behind > 0">⬇️ <strong>[[ projectStatus.behind ]]</strong> behind</span>
+                        <span class="meta-item" v-if="projectStatus.has_conflict" class="conflict-warn">⚠️ Conflict</span>
+                        <span class="meta-item" v-if="!isGitRepo">⏳ Chưa có Git</span>
+                        <span class="meta-item" v-else-if="gitConnectionClass === 'connected'">✅ Đã kết nối</span>
+                    </div>
+                </div>
+                <div class="repo-header-actions">
+                    <button class="btn btn-primary" @click="openInFork" :disabled="!settings.fork_path">🔓 Fork</button>
+                    <button class="btn btn-danger" @click="deleteProject">🗑 Xóa</button>
+                </div>
+            </div>
+
+            <!-- Init Git -->
+            <div v-if="!isGitRepo" class="init-git-section">
+                <div class="init-git-card">
+                    <div class="init-git-icon">📂</div>
+                    <div class="init-git-info">
+                        <h3>Thư mục này chưa có Git</h3>
+                        <p>Khởi tạo Git repository để bắt đầu quản lý phiên bản.</p>
+                        <button class="btn btn-primary btn-lg" @click="initGitRepo" :disabled="initGitLoading">[[ initGitLoading ? '⏳...' : '🚀 Tạo Git repo' ]]</button>
+                        <div v-if="initResult" class="result-box" :class="initResult.success ? 'success' : 'error'"><pre>[[ initResult.message || initResult.stdout ]]</pre></div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- GitHub-style action bar -->
+            <div v-if="isGitRepo" class="action-bar">
+                <button class="abtn" @click="executePull" :disabled="syncing">⬇️ Kéo về</button>
+                <button class="abtn" @click="executePush" :disabled="syncing">⬆️ Đẩy lên</button>
+                <button class="abtn" @click="showCommitPanel = !showCommitPanel">💾 Lưu commit</button>
+                <button class="abtn" @click="showBranchPanel = !showBranchPanel">🌿 Nhánh</button>
+                <button class="abtn" @click="executeFetch" :disabled="syncing">📥 Lấy về</button>
+                <button class="abtn" @click="executeStashPush">📦 Cất giữ</button>
+                <span class="abtn-info">📝 [[ stagedCount ]] đã stage</span>
+            </div>
+
+            <!-- Remote section -->
+            <div v-if="isGitRepo" class="remote-section">
+                <div class="remote-row" v-for="(url, name) in remoteMap" :key="name">
+                    <span class="remote-label">[[ name ]]:</span>
+                    <input type="text" class="form-input mono remote-input" :value="url" @change="updateRemoteUrl(name, $event.target.value)">
+                    <button class="btn btn-xs" @click="copyText(url)">📋</button>
+                    <button class="btn btn-xs btn-danger" @click="removeRemoteByName(name)">🗑</button>
+                </div>
+                <div v-if="Object.keys(remoteMap).length === 0" class="remote-empty">
+                    <div style="margin-bottom:8px">🔗 Chưa có remote</div>
+                    <div style="display:flex;gap:6px;margin-bottom:8px;flex-wrap:wrap">
+                        <button class="btn btn-primary btn-sm" @click="createAndPushRemote('github')" :disabled="creatingRemote" v-if="settings.has_github_token">[[ creatingRemote === 'github' ? '⏳...' : '⬆️ GitHub' ]]</button>
+                        <button class="btn btn-primary btn-sm" @click="createAndPushRemote('gitea')" :disabled="creatingRemote" v-if="settings.has_gitea_token">[[ creatingRemote === 'gitea' ? '⏳...' : '☕ Gitea' ]]</button>
+                        <button class="btn btn-secondary btn-sm" @click="createAndPushRemote('both')" :disabled="creatingRemote" v-if="settings.has_github_token && settings.has_gitea_token">[[ creatingRemote === 'both' ? '⏳...' : '🔗 Cả hai' ]]</button>
+                    </div>
+                    <div class="input-row"><input type="text" v-model="newRemoteUrl" class="form-input mono" placeholder="URL" style="flex:1"><input type="text" v-model="newRemoteName" class="form-input" placeholder="tên" style="width:70px"><button class="btn btn-secondary btn-sm" @click="addRemote">＋</button></div>
+                </div>
+            </div>
+
+            <!-- Result box -->
+            <div v-if="syncResult" class="result-box" :class="syncResult.success ? 'success' : 'error'"><pre>[[ syncResult.message || syncResult.stdout ]]</pre></div>
+            <div v-if="commitResult" class="result-box" :class="commitResult.success ? 'success' : 'error'"><pre>[[ commitResult.message || commitResult.stdout ]]</pre></div>
+            <div v-if="branchResult" class="result-box" :class="branchResult.success ? 'success' : 'error'"><pre>[[ branchResult.message || branchResult.stdout ]]</pre></div>
+
+            <!-- Commit Panel -->
+            <div v-if="showCommitPanel" class="expand-panel">
+                <div class="expand-header"><h3>💾 Commit</h3><button class="btn btn-close" @click="showCommitPanel = false">✖</button></div>
+                <textarea v-model="commitMessage" class="form-input commit-message-input" placeholder="Thông điệp commit..." rows="2"></textarea>
+                <textarea v-model="commitDescription" class="form-input" placeholder="Mô tả (optional)..." rows="2" style="margin-top:6px"></textarea>
+                <div class="commit-actions" style="margin-top:8px">
+                    <button class="btn btn-primary" @click="executeCommit" :disabled="!commitMessage.trim() || stagedCount === 0">💾 Commit</button>
+                    <button class="btn btn-secondary btn-sm" @click="stageAll">＋ Stage all</button>
+                </div>
+            </div>
+
+            <!-- Branch Panel -->
+            <div v-if="showBranchPanel" class="expand-panel">
+                <div class="expand-header"><h3>🌿 Nhánh</h3><button class="btn btn-close" @click="showBranchPanel = false">✖</button></div>
+                <div class="input-row" style="margin-bottom:8px"><input type="text" v-model="newBranchName" class="form-input" placeholder="Tên nhánh mới..." @keyup.enter="createBranch"><button class="btn btn-primary btn-sm" @click="createBranch">＋ Tạo</button></div>
+                <table class="file-table"><thead><tr><th>Nhánh</th><th width="160">Thao tác</th></tr></thead>
+                    <tbody><tr v-for="b in branches" :key="b.name"><td><span v-if="b.current" class="current-badge">⬅️</span> [[ b.name ]]<span v-if="b.remote" class="remote-badge">🌐</span></td><td><button class="btn btn-xs" @click="switchBranch(b.name)" :disabled="b.current">🔀</button><button class="btn btn-xs" @click="deleteBranch(b.name)" :disabled="b.current || b.remote">🗑</button></td></tr></tbody>
+                </table>
+            </div>
+
+            <!-- GitKraken-style: File Tree + Graph + Changes -->
+            <div v-if="isGitRepo" class="repo-content">
+                <!-- File tree sidebar -->
+                <div class="file-tree-panel">
+                    <div class="file-tree-header">📂 Thư mục</div>
+                    <div v-if="fileTreeLoading" class="file-tree-loading">⏳</div>
+                    <div v-else class="file-tree-list">
+                        <div v-for="item in fileTree" :key="item.path" class="tree-item" :style="{ paddingLeft: (item.path.split('/').length - 1) * 16 + 'px' }"
+                             @click="viewFileContent(item)" :class="{ active: viewingFile === item.path }">
+                            <span v-if="item.type === 'dir'">📁</span>
+                            <span v-else>📄</span>
+                            <span class="tree-item-name">[[ item.name ]]</span>
+                        </div>
+                        <div v-if="fileTree.length === 0" class="file-tree-empty">(empty repo)</div>
+                    </div>
+                </div>
+
+                <!-- Content area -->
+                <div class="file-content-panel">
+                    <!-- File changes + Git graph (GitKraken-style) -->
+                    <div v-if="!viewingFile">
+                        <!-- Git Graph with branch lines (GitKraken-style) -->
+                        <div class="graph-section">
+                            <div class="section-header"><h3>🌳 Đồ thị commit</h3>
+                                <div style="display:flex;gap:4px">
+                                    <button class="btn btn-secondary btn-sm" @click="fetchGraph">🔄</button>
+                                </div>
+                            </div>
+                            <div v-if="graphData.length > 0" class="git-graph">
+                                <div v-for="(row, idx) in graphData" :key="idx" class="graph-row"
+                                     @click="selectedCommit = row"
+                                     :class="{ 'graph-row-selected': selectedCommit && (selectedCommit.full_hash === row.full_hash || selectedCommit.hash === row.hash) }">
+                                    <!-- Graph lines rendered as SVG -->
+                                    <div class="graph-svg-col">
+                                        <svg width="80" :height="graphRowHeight" class="graph-svg">
+                                            <template v-for="(seg, si) in renderGraphSegments(row.graph, idx)" :key="si">
+                                                <!-- Vertical line -->
+                                                <line v-if="seg.type === 'vert'" :x1="seg.x" y1="0" :x2="seg.x" :y2="graphRowHeight"
+                                                      :stroke="seg.color" stroke-width="2"/>
+                                                <!-- Slash / -->
+                                                <line v-if="seg.type === 'slash'" :x1="seg.x1" y1="0" :x2="seg.x2" :y2="graphRowHeight"
+                                                      :stroke="seg.color" stroke-width="2"/>
+                                                <!-- Backslash \ -->
+                                                <line v-if="seg.type === 'backslash'" :x1="seg.x1" y1="0" :x2="seg.x2" :y2="graphRowHeight"
+                                                      :stroke="seg.color" stroke-width="2"/>
+                                                <!-- Node dot -->
+                                                <circle v-if="seg.type === 'node'" :cx="seg.x" cy="12" r="5"
+                                                        :fill="seg.color" stroke="#1e1e2e" stroke-width="2"/>
+                                            </template>
+                                        </svg>
+                                    </div>
+                                    <div class="graph-body" v-if="row.hash">
+                                        <div class="graph-msg-row">
+                                            <span class="graph-hash mono">[[ row.hash ]]</span>
+                                            <span class="graph-msg">[[ row.message ]]</span>
+                                            <span class="graph-refs" v-if="row.refs">[[ row.refs ]]</span>
+                                        </div>
+                                        <div class="graph-meta-row">
+                                            <span class="graph-author">👤 [[ row.author ]]</span>
+                                            <span class="graph-date">🕐 [[ formatDateVerbose(row.date) ]]</span>
+                                        </div>
+                                    </div>
+                                    <div class="graph-actions" v-if="row.hash" @click.stop>
+                                        <button class="btn btn-xs" @click.stop="checkoutCommit(row.hash)" title="Checkout">🔀</button>
+                                    </div>
+                                </div>
+                            </div>
+                            <div v-else class="status-clean">Chưa có commit nào</div>
+                        </div>
+
+                        <!-- Changes -->
+                        <div class="section-header" style="margin-top:12px"><h3>📊 Thay đổi</h3><button class="btn btn-secondary btn-sm" @click="refreshStatus">🔄</button></div>
+                        <div v-if="projectStatus.files && projectStatus.files.length > 0">
+                            <div style="display:flex;gap:6px;margin-bottom:6px">
+                                <button class="btn btn-xs btn-primary" @click="stageAll">＋ Stage tất cả</button>
+                                <button class="btn btn-xs" @click="unstageAll">－ Bỏ stage</button>
+                                <button class="btn btn-xs" @click="refreshStatus">🔄</button>
+                            </div>
+                            <table class="file-table"><thead><tr><th width="30"></th><th>File</th><th>Trạng thái</th><th width="80"></th></tr></thead>
+                                <tbody><tr v-for="file in projectStatus.files" :key="file.path" :class="statusRowClass(file.status)"
+                                    @click.right.prevent="showContextMenu($event, file)">
+                                    <td><input type="checkbox" :checked="isStaged(file.status)" @change="toggleStage(file)"></td>
+                                    <td class="file-path">[[ file.path ]]</td>
+                                    <td><span class="status-badge" :class="'badge-' + file.status.toLowerCase()">[[ file.status ]]</span></td>
+                                    <td>
+                                        <button class="btn btn-xs" @click="viewDiff(file.path)" title="Xem diff">📄</button>
+                                        <button class="btn btn-xs" @click="openFileInExplorer(file.path)" title="Mở file">📂</button>
+                                    </td>
+                                </tr></tbody>
+                            </table>
+                        </div>
+                        <div v-else class="status-clean">✅ Không có file thay đổi</div>
+                    </div>
+
+                    <!-- File content viewer -->
+                    <div v-if="viewingFile" class="file-view">
+                        <div class="file-view-header">
+                            <span class="mono">📄 [[ viewingFile ]]</span>
+                            <button class="btn btn-close" @click="viewingFile = ''">✖</button>
+                        </div>
+                        <div v-if="fileContentLoading" class="status-clean">⏳ Đang tải...</div>
+                        <div v-else>
+                            <pre class="file-content-text" :class="{ 'readme-content': isReadmeFile(viewingFile) }">[[ fileContent ]]</pre>
+                        </div>
+                    </div>
+
+                    <!-- Diff -->
+                    <div v-if="diffContent && !viewingFile" class="diff-viewer">
+                        <div class="diff-header"><h4>📄 So sánh: [[ diffFile ]]</h4><button class="btn btn-close" @click="diffContent = ''">✖</button></div>
+                        <pre class="diff-content">[[ diffContent ]]</pre>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </main>
+</div>
+
+{% include "partials/add_modal.html" %}
+{% include "partials/settings_modal.html" %}
+{% endblock %}

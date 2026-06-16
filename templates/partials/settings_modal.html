@@ -1,0 +1,33 @@
+<!-- Settings Modal -->
+<div class="modal-overlay" :class="{ visible: showSettingsModal }" @click.self="closeSettings">
+    <div class="modal modal-settings">
+        <div class="modal-header"><h2>⚙️ Cài đặt</h2><button class="btn-close" @click="closeSettings">✖</button></div>
+        <div class="tab-content">
+            <div class="form-group">
+                <label>GitHub Token (PAT)</label>
+                <div class="input-row"><input type="password" v-model="formSettings.github_token" class="form-input" placeholder="ghp_..."><button class="btn btn-secondary" @click="checkToken('github')" :disabled="!formSettings.github_token">[[ checking.github ? '⏳...' : '✅ Kiểm tra' ]]</button></div>
+                <span v-if="tokenResults.github === true" class="help-text success">✅ Token hợp lệ</span>
+                <span v-if="tokenResults.github === false" class="help-text error">❌ Token không hợp lệ</span>
+            </div>
+            <div class="form-group"><label>Gitea Server URL</label><input type="text" v-model="formSettings.gitea_server_url" class="form-input" placeholder="https://gitea.example.com"></div>
+            <div class="form-group">
+                <label>Gitea Token (tùy chọn)</label>
+                <div class="input-row"><input type="password" v-model="formSettings.gitea_token" class="form-input" placeholder="..."><button class="btn btn-secondary" @click="checkToken('gitea')" :disabled="!formSettings.gitea_token || !formSettings.gitea_server_url">[[ checking.gitea ? '⏳...' : '✅ Kiểm tra' ]]</button></div>
+                <span v-if="tokenResults.gitea === true" class="help-text success">✅ Token hợp lệ</span>
+                <span v-if="tokenResults.gitea === false" class="help-text error">❌ Token không hợp lệ</span>
+            </div>
+            <div class="form-group">
+                <label>Hoặc Username / Password</label>
+                <div class="input-row" style="margin-bottom:6px"><input type="text" v-model="formSettings.gitea_username" class="form-input" placeholder="Username"></div>
+                <div class="input-row"><input type="password" v-model="formSettings.gitea_password" class="form-input" placeholder="Password"><button class="btn btn-secondary" @click="checkGiteaPassword" :disabled="!formSettings.gitea_username || !formSettings.gitea_password || !formSettings.gitea_server_url">[[ checking.password ? '⏳...' : '✅ Kiểm tra' ]]</button></div>
+                <span v-if="tokenResults.password === true" class="help-text success">✅ Đăng nhập thành công</span>
+                <span v-if="tokenResults.password === false" class="help-text error">❌ Sai user/pass</span>
+            </div>
+            <div class="form-group">
+                <label>Đường dẫn Fork</label>
+                <div class="input-row"><input type="text" v-model="formSettings.fork_path" class="form-input" placeholder="C:\Program Files\Fork\fork.exe"><button class="btn btn-secondary" @click="browseFile">Browse...</button></div>
+            </div>
+            <button class="btn btn-primary btn-full" @click="saveSettings">💾 Lưu cài đặt</button>
+        </div>
+    </div>
+</div>
