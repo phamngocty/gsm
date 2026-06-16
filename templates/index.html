@@ -441,26 +441,34 @@
                                     <button class="btn btn-secondary btn-sm" @click="fetchGraph">🔄</button>
                                 </div>
                             </div>
-                            <div v-if="graphData.length > 0" class="git-graph">
+                            <!-- Column headers -->
+                            <div v-if="graphData.length > 0" class="graph-table">
+                                <div class="graph-header">
+                                    <div class="graph-header-col graph-header-graph">🌳 GRAPH</div>
+                                    <div class="graph-header-col graph-header-msg">💬 COMMIT MESSAGE</div>
+                                    <div class="graph-header-col graph-header-action"></div>
+                                </div>
                                 <div v-for="(row, idx) in graphData" :key="idx" class="graph-row"
                                      @click="selectedCommit = row"
                                      :class="{ 'graph-row-selected': selectedCommit && (selectedCommit.full_hash === row.full_hash || selectedCommit.hash === row.hash) }">
                                     <!-- Graph lines rendered as SVG -->
                                     <div class="graph-svg-col">
-                                        <svg width="80" :height="graphRowHeight" class="graph-svg">
+                                        <svg :width="graphSvgWidth" :height="graphRowHeight" class="graph-svg">
                                             <template v-for="(seg, si) in renderGraphSegments(row.graph, idx)" :key="si">
                                                 <!-- Vertical line -->
                                                 <line v-if="seg.type === 'vert'" :x1="seg.x" y1="0" :x2="seg.x" :y2="graphRowHeight"
-                                                      :stroke="seg.color" stroke-width="2"/>
+                                                      :stroke="seg.color" stroke-width="2.5" opacity="0.7"/>
                                                 <!-- Slash / -->
                                                 <line v-if="seg.type === 'slash'" :x1="seg.x1" y1="0" :x2="seg.x2" :y2="graphRowHeight"
-                                                      :stroke="seg.color" stroke-width="2"/>
+                                                      :stroke="seg.color" stroke-width="2.5" opacity="0.7"/>
                                                 <!-- Backslash \ -->
                                                 <line v-if="seg.type === 'backslash'" :x1="seg.x1" y1="0" :x2="seg.x2" :y2="graphRowHeight"
-                                                      :stroke="seg.color" stroke-width="2"/>
-                                                <!-- Node dot -->
-                                                <circle v-if="seg.type === 'node'" :cx="seg.x" cy="12" r="5"
-                                                        :fill="seg.color" stroke="#1e1e2e" stroke-width="2"/>
+                                                      :stroke="seg.color" stroke-width="2.5" opacity="0.7"/>
+                                                <!-- Node dot - bigger with border -->
+                                                <template v-if="seg.type === 'node'">
+                                                    <circle :cx="seg.x" cy="16" r="7" :fill="seg.color" opacity="0.2"/>
+                                                    <circle :cx="seg.x" cy="16" r="5" :fill="seg.color" stroke="#1e1e2e" stroke-width="2.5"/>
+                                                </template>
                                             </template>
                                         </svg>
                                     </div>
@@ -468,10 +476,19 @@
                                         <div class="graph-msg-row">
                                             <span class="graph-hash mono">[[ row.hash ]]</span>
                                             <span class="graph-msg">[[ row.message ]]</span>
-                                            <span class="graph-refs" v-if="row.refs">[[ row.refs ]]</span>
+                                            <span class="graph-refs" v-if="row.refs">
+                                                <template v-for="ref in parseRefs(row.refs)" :key="ref.name">
+                                                    <span v-if="ref.type === 'tag'" class="graph-ref-tag">🏷️ [[ ref.name ]]</span>
+                                                    <span v-else-if="ref.type === 'head'" class="graph-ref-head">⬅️ [[ ref.name ]]</span>
+                                                    <span v-else class="graph-ref-branch">🌿 [[ ref.name ]]</span>
+                                                </template>
+                                            </span>
                                         </div>
                                         <div class="graph-meta-row">
-                                            <span class="graph-author">👤 [[ row.author ]]</span>
+                                            <span class="graph-author">
+                                                <span class="graph-author-avatar" :style="{ background: authorColor(row.author) }">[[ authorInitial(row.author) ]]</span>
+                                                [[ row.author ]]
+                                            </span>
                                             <span class="graph-date">🕐 [[ formatDateVerbose(row.date) ]]</span>
                                         </div>
                                     </div>

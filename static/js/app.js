@@ -42,38 +42,65 @@ const app = createApp({
 
         // Git graph
         const graphData = ref([]);
-        const graphRowHeight = 24;
+        const graphRowHeight = 32;
+        const graphSvgWidth = 120;
         const selectedCommit = ref(null);
 
         // Graph colors for branch lines
         const graphColors = ['#7c5cfc', '#60a5fa', '#4ade80', '#fb923c', '#f87171', '#22d3ee', '#facc15', '#c084fc', '#34d399', '#f472b6'];
 
+        function parseRefs(refsStr) {
+            if (!refsStr) return [];
+            const results = [];
+            let str = refsStr.replace(/^[\(\)\s,]+|[\(\)\s,]+$/g, '').trim();
+            if (!str) return [];
+            const parts = str.split(',').map(s => s.trim()).filter(Boolean);
+            for (const p of parts) {
+                if (p.startsWith('tag:')) {
+                    results.push({ type: 'tag', name: p.replace(/^tag:\s*/, '').trim() });
+                } else if (p.startsWith('HEAD')) {
+                    const rest = p.replace(/^HEAD(?:\s*->\s*)?/, '').trim();
+                    if (rest) results.push({ type: 'head', name: rest });
+                    else results.push({ type: 'head', name: 'HEAD' });
+                } else {
+                    results.push({ type: 'branch', name: p });
+                }
+            }
+            return results;
+        }
+
+        function authorColor(name) {
+            if (!name) return '#666';
+            const colors = ['#7c5cfc', '#60a5fa', '#4ade80', '#fb923c', '#f87171', '#22d3ee', '#facc15', '#c084fc', '#34d399', '#f472b6', '#a78bfa'];
+            let hash = 0;
+            for (let i = 0; i < name.length; i++) hash = name.charCodeAt(i) + ((hash << 5) - hash);
+            return colors[Math.abs(hash) % colors.length];
+        }
+
+        function authorInitial(name) {
+            if (!name) return '?';
+            return name.charAt(0).toUpperCase();
+        }
+
         function renderGraphSegments(graphStr, rowIdx) {
             const segments = [];
             if (!graphStr) return segments;
-            // Parse the ASCII graph string
-            // Characters: * (node), | (vertical), / (slash), \ (backslash), _ (underscore), . (dot), space
             const chars = graphStr.split('');
-            const positions = {};
             let col = 0;
             for (let i = 0; i < chars.length; i++) {
                 const ch = chars[i];
-                const x = i * 10 + 5; // 10px per column
+                const x = i * 14 + 8;
                 if (ch === '*') {
                     const color = graphColors[i % graphColors.length];
                     segments.push({ type: 'node', x, color });
                     segments.push({ type: 'vert', x, color });
                 } else if (ch === '|') {
-                    segments.push({ type: 'vert', x: col * 10 + 5, color: graphColors[col % graphColors.length] });
+                    segments.push({ type: 'vert', x: col * 14 + 8, color: graphColors[col % graphColors.length] });
                 } else if (ch === '/') {
-                    segments.push({ type: 'slash', x1: (col + 1) * 10 + 5, x2: col * 10 + 5, color: graphColors[col % graphColors.length] });
+                    segments.push({ type: 'slash', x1: (col + 1) * 14 + 8, x2: col * 14 + 8, color: graphColors[col % graphColors.length] });
                     col++;
                 } else if (ch === '\\') {
-                    segments.push({ type: 'backslash', x1: col * 10 + 5, x2: (col + 1) * 10 + 5, color: graphColors[col % graphColors.length] });
-                } else if (ch === '_') {
-                    // horizontal line - skip for now
-                } else if (ch === '.') {
-                    // dotted line - skip
+                    segments.push({ type: 'backslash', x1: col * 14 + 8, x2: (col + 1) * 14 + 8, color: graphColors[col % graphColors.length] });
                 }
             }
             return segments;
@@ -1005,7 +1032,8 @@ const app = createApp({
             initGitLoading, initResult, isGitRepo, gitConnectionClass,
             showReleasesPanel, newReleaseTag, newReleaseDesc, releases, releaseResult,
             fetchReleases, createRelease, deleteRelease, pushReleaseTag,
-            graphData, graphRowHeight, selectedCommit, contextMenu, commitNodeClass, formatDateVerbose, showContextMenu, openFileInExplorer, checkoutCommit, fetchGraph, renderGraphSegments,
+            graphData, graphRowHeight, graphSvgWidth, selectedCommit, contextMenu, commitNodeClass, formatDateVerbose, showContextMenu, openFileInExplorer, checkoutCommit, fetchGraph, renderGraphSegments,
+            parseRefs, authorColor, authorInitial,
             showResetPanel, resetTarget, showResetConfirm, resetResult,
             resetToCommit, executeReset, confirmHardReset, confirmRevert,
             diffContent, diffFile,
