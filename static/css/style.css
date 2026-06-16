@@ -160,6 +160,9 @@ body { font-family: var(--font); background: var(--bg-primary); color: var(--tex
 .result-box.error { background: rgba(248,113,113,0.1); border: 1px solid var(--red); color: var(--red); }
 .result-box pre { font-family: var(--mono); font-size: 11px; white-space: pre-wrap; margin: 0; }
 
+/* Error suggestion */
+.error-suggestion { margin-top: 8px; padding: 8px 10px; background: rgba(248,113,113,0.08); border-left: 3px solid var(--red); border-radius: 4px; font-size: 12px; line-height: 1.5; color: var(--text-primary); white-space: pre-line; }
+
 /* ─── Expand Panel ─── */
 .expand-panel { background: var(--bg-surface); border: 1px solid var(--border); border-radius: var(--radius-lg); padding: 16px; margin-bottom: 12px; }
 .expand-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 10px; }

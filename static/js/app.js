@@ -241,6 +241,58 @@ const app = createApp({
         function isStaged(status) { return ['Staged', 'Staged+Modified', 'Added'].includes(status); }
         function formatDate(iso) { return iso ? iso.split('T')[0] : ''; }
 
+        // ── Error Analysis ──
+        function analyzeGitError(result) {
+            const msg = (result.message || result.stderr || result.stdout || '').toLowerCase();
+            const originalMsg = result.message || result.stderr || result.stdout || '';
+
+            const patterns = [
+                // Push errors
+                { match: /failed to push some refs/i, hint: '⬆️ Cần kéo (Pull) trước khi đẩy (Push) do remote có commit mới.\n👉 Cách fix: Nhấn "Kéo về" (Pull) để đồng bộ, sau đó thử Push lại.' },
+                { match: /(couldn't find remote ref|src refspec.*does not match any)/i, hint: '🔍 Không tìm thấy nhánh trên remote.\n👉 Cách fix: Kiểm tra tên nhánh hoặc dùng "git push --all"' },
+                { match: /(permission denied|publickey)/i, hint: '🔑 Lỗi xác thực SSH key.\n👉 Cách fix: Kiểm tra SSH key đã được thêm vào GitHub/Gitea chưa.' },
+                { match: /(authentication failed|auth failed)/i, hint: '🔑 Lỗi xác thực.\n👉 Cách fix: Kiểm tra lại token hoặc username/password trong Cài đặt.' },
+                { match: /could not read from remote repository/i, hint: '🌐 Không thể kết nối remote.\n👉 Cách fix: Kiểm tra URL remote và kết nối mạng.' },
+                { match: /remote.*already exists/i, hint: '📛 Remote đã tồn tại.\n👉 Cách fix: Dùng tên khác hoặc update URL remote hiện tại.' },
+
+                // Pull errors
+                { match: /(conflict|merge conflict)/i, hint: '⚠️ Xung đột (conflict) khi merge!\n👉 Cách fix: Mở Fork để giải quyết conflict thủ công, sau đó commit kết quả.' },
+                { match: /(couldn't merge|automatic merge failed)/i, hint: '⚠️ Không thể tự động merge.\n👉 Cách fix: Giải quyết conflict thủ công.' },
+                { match: /already up to date/i, hint: '✅ Remote đã đồng bộ, không có gì để kéo về.' },
+                { match: /(not a git repository|fatal: not a git repository)/i, hint: '📂 Thư mục này chưa phải Git repository.\n👉 Cách fix: Nhấn "Tạo Git repo" để khởi tạo.' },
+
+                // Commit errors
+                { match: /(nothing to commit|no changes added)/i, hint: '📝 Không có thay đổi nào để commit.\n👉 Cách fix: Stage file trước (chọn checkbox) hoặc tạo thay đổi trong code.' },
+                { match: /changes not staged for commit/i, hint: '📝 File chưa được stage.\n👉 Cách fix: Chọn checkbox bên cạnh file để stage, hoặc nhấn "Stage tất cả".' },
+                { match: /nothing added to commit/i, hint: '📝 Chưa có file nào được stage.\n👉 Cách fix: Dùng "Stage tất cả" hoặc stage từng file.' },
+                { match: /please tell me who you are/i, hint: '👤 Chưa cấu hình Git user.\n👉 Cách fix: Chạy lệnh:\ngit config user.email "email@example.com"\ngit config user.name "Tên của bạn"' },
+                { match: /commit before pull/i, hint: '💾 Có commit local chưa được push.\n👉 Cách fix: Commit trước hoặc dùng "git stash" để tạm cất.' },
+
+                // Branch errors
+                { match: /(did not match any file|pathspec.*did not match)/i, hint: '🔍 Không tìm thấy file hoặc nhánh này.\n👉 Cách fix: Kiểm tra lại tên đường dẫn hoặc tên nhánh.' },
+                { match: /(already exists|cannot create.*already)/i, hint: '📛 Đã tồn tại.\n👉 Cách fix: Dùng tên khác.' },
+                { match: /(couldn't find|cannot find|not found)/i, hint: '🔍 Không tìm thấy.\n👉 Cách fix: Kiểm tra lại tên hoặc đường dẫn.' },
+
+                // Stash errors
+                { match: /no stash found/i, hint: '📦 Không có stash nào để phục hồi.\n👉 Cách fix: Dùng "Cất giữ" (Stash) trước để lưu thay đổi tạm thời.' },
+
+                // General
+                { match: /has no commits yet/i, hint: '📂 Repository chưa có commit nào.\n👉 Cách fix: Tạo file mới, stage và commit lần đầu tiên.' },
+                { match: /is beyond/i, hint: '⚠️ Lỗi không xác định.\n👉 Cách fix: Kiểm tra lại thao tác hoặc thử làm mới (Refresh).' },
+            ];
+
+            for (const p of patterns) {
+                if (p.match.test(msg)) return p.hint;
+            }
+
+            // Generic fallback
+            if (result.returncode === 128) return '🔒 Lỗi truy cập. Kiểm tra quyền và kết nối mạng.';
+            if (result.returncode === 1 && msg.includes('fatal:')) return '❌ Lỗi Git nghiêm trọng. Kiểm tra thông báo lỗi bên trên.';
+            if (result.returncode && result.returncode !== 0) return '⚠️ Lỗi không xác định (mã ' + result.returncode + '). Hãy thử làm mới hoặc kiểm tra terminal.';
+
+            return '';
+        }
+
         function formatDateVerbose(iso) {
             if (!iso) return '';
             try {
@@ -584,7 +636,7 @@ const app = createApp({
             cloneForm, createForm, cloning, creating, cloneProgress, createProgress,
             settings, formSettings, checking, tokenResults,
             giteaRepos, giteaRepoCount, giteaLoading, giteaError, giteaImporting, giteaImportProgress, giteaImport,
-            selectProject, selectWorkingDir, filterProjects, statusClass, statusRowClass, isStaged, formatDate, copyText,
+            selectProject, selectWorkingDir, filterProjects, statusClass, statusRowClass, isStaged, formatDate, copyText, analyzeGitError,
             refreshAll, refreshStatus, refreshLog, refreshBranches,
             stageFile, unstageFile, toggleStage, stageAll, unstageAll, viewDiff,
             executeCommit, createBranch, switchBranch, deleteBranch,

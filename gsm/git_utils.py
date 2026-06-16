@@ -126,7 +126,22 @@ def has_multi_push(project_path: str) -> bool:
 
 
 def git_init(project_path: str) -> dict:
-    return _run_git_lines(["init"], cwd=project_path)
+    """Initialize a git repo and create initial commit so repo is not empty."""
+    result = _run_git_lines(["init"], cwd=project_path)
+    if not result.get("success"):
+        return result
+    # Create .gitkeep so repo has at least one file
+    gitkeep = os.path.join(project_path, ".gitkeep")
+    try:
+        with open(gitkeep, "w") as f:
+            f.write("")
+    except:
+        pass
+    _run_git_lines(["add", ".gitkeep"], cwd=project_path)
+    commit_result = _run_git_lines(["commit", "-m", "Initial commit"], cwd=project_path)
+    if commit_result.get("success"):
+        result["stdout"] += "\n" + commit_result.get("stdout", "")
+    return result
 
 
 def git_stage_file(project_path: str, file_path: str) -> dict:

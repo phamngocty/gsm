@@ -206,9 +206,19 @@
             </div>
 
             <!-- Result box -->
-            <div v-if="syncResult" class="result-box" :class="syncResult.success ? 'success' : 'error'"><pre>[[ syncResult.message || syncResult.stdout ]]</pre></div>
-            <div v-if="commitResult" class="result-box" :class="commitResult.success ? 'success' : 'error'"><pre>[[ commitResult.message || commitResult.stdout ]]</pre></div>
-            <div v-if="branchResult" class="result-box" :class="branchResult.success ? 'success' : 'error'"><pre>[[ branchResult.message || branchResult.stdout ]]</pre></div>
+            <!-- Result boxes with error analysis -->
+            <div v-if="syncResult" class="result-box" :class="syncResult.success ? 'success' : 'error'">
+                <pre>[[ syncResult.message || syncResult.stdout || syncResult.stderr ]]</pre>
+                <div v-if="!syncResult.success" class="error-suggestion">💡 [[ analyzeGitError(syncResult) ]]</div>
+            </div>
+            <div v-if="commitResult" class="result-box" :class="commitResult.success ? 'success' : 'error'">
+                <pre>[[ commitResult.message || commitResult.stdout || commitResult.stderr ]]</pre>
+                <div v-if="!commitResult.success" class="error-suggestion">💡 [[ analyzeGitError(commitResult) ]]</div>
+            </div>
+            <div v-if="branchResult" class="result-box" :class="branchResult.success ? 'success' : 'error'">
+                <pre>[[ branchResult.message || branchResult.stdout || branchResult.stderr ]]</pre>
+                <div v-if="!branchResult.success" class="error-suggestion">💡 [[ analyzeGitError(branchResult) ]]</div>
+            </div>
 
             <!-- Commit Panel -->
             <div v-if="showCommitPanel" class="expand-panel">
