@@ -329,6 +329,10 @@ body { font-family: var(--font); background: var(--bg-primary); color: var(--tex
 /* ─── Keyboard hints ─── */
 .kbd-hint { font-size: 10px; color: var(--text-muted); margin-left: auto; opacity: 0.6; }
 
+/* ─── Auto push checkbox ─── */
+.auto-push-label { display: inline-flex; align-items: center; gap: 4px; font-size: 12px; color: var(--text-muted); cursor: pointer; margin-left: auto; }
+.auto-push-label input[type="checkbox"] { accent-color: var(--accent); width: 14px; height: 14px; }
+
 /* ─── Releases ─── */
 .release-create { background: var(--bg-primary); border-radius: var(--radius); padding: 12px; }
 .release-item { border: 1px solid var(--border); border-radius: var(--radius); margin-bottom: 8px; overflow: hidden; }
@@ -337,3 +341,21 @@ body { font-family: var(--font); background: var(--bg-primary); color: var(--tex
 .release-commit { font-size: 11px; color: var(--text-muted); font-family: var(--mono); }
 .release-body { padding: 10px 14px; }
 .release-desc { font-family: var(--mono); font-size: 12px; line-height: 1.5; white-space: pre-wrap; margin: 0; color: var(--text-secondary); }
+
+/* ─── Reset / Restore ─── */
+.reset-warning { background: rgba(248,113,113,0.1); border: 1px solid rgba(248,113,113,0.3); border-radius: var(--radius); padding: 10px 14px; margin-bottom: 12px; font-size: 13px; color: var(--red); }
+.reset-commit-list { max-height: 200px; overflow-y: auto; border: 1px solid var(--border); border-radius: var(--radius); margin-bottom: 12px; }
+.reset-commit-item { display: flex; gap: 8px; align-items: center; padding: 6px 10px; cursor: pointer; border-bottom: 1px solid var(--border); font-size: 12px; }
+.reset-commit-item:last-child { border-bottom: none; }
+.reset-commit-item:hover { background: var(--bg-hover); }
+.reset-options { display: flex; flex-direction: column; gap: 8px; }
+.reset-option { display: flex; gap: 12px; align-items: center; padding: 12px 16px; border: 1px solid var(--border); border-radius: var(--radius); cursor: pointer; transition: all 0.15s; }
+.reset-option:hover { border-color: var(--accent); background: var(--bg-hover); }
+.reset-option-danger { border-color: rgba(248,113,113,0.3); }
+.reset-option-danger:hover { border-color: var(--red); background: rgba(248,113,113,0.08); }
+.reset-option-icon { font-size: 24px; }
+.reset-option-info { flex: 1; }
+.reset-option-info strong { display: block; font-size: 14px; margin-bottom: 2px; }
+.reset-option-info span { font-size: 12px; color: var(--text-muted); }
+.abtn-danger { border-color: rgba(248,113,113,0.3) !important; color: var(--red) !important; }
+.abtn-danger:hover { background: rgba(248,113,113,0.1) !important; }

@@ -184,6 +184,7 @@
                 <button class="abtn" @click="executeFetch" :disabled="syncing">📥 Lấy về</button>
                 <button class="abtn" @click="executeStashPush">📦 Cất giữ</button>
                 <button class="abtn" @click="showReleasesPanel = !showReleasesPanel">🏷️ Releases</button>
+                <button class="abtn abtn-danger" @click="showResetPanel = !showResetPanel">⏪ Khôi phục</button>
                 <span class="abtn-info">📝 [[ stagedCount ]] đã stage</span>
             </div>
 
@@ -233,6 +234,9 @@
                 <div class="commit-actions" style="margin-top:8px">
                     <button class="btn btn-primary" @click="executeCommit" :disabled="!commitMessage.trim() || stagedCount === 0">💾 Commit</button>
                     <button class="btn btn-secondary btn-sm" @click="stageAll">＋ Stage all</button>
+                    <label class="auto-push-label" title="Tự động đẩy lên remote sau khi commit" v-if="remotes.length > 0">
+                        <input type="checkbox" v-model="autoPushAfterCommit"> ⬆️ Tự động push
+                    </label>
                 </div>
             </div>
 
@@ -303,6 +307,72 @@
                 <div v-else class="status-clean">Chưa có release nào. Tạo tag/release để đánh dấu phiên bản.</div>
             </div>
 
+            <!-- Reset / Restore Panel -->
+            <div v-if="showResetPanel" class="expand-panel">
+                <div class="expand-header">
+                    <h3>⏪ Khôi phục phiên bản</h3>
+                    <button class="btn btn-close" @click="showResetPanel = false">✖</button>
+                </div>
+                <div class="reset-warning">
+                    ⚠️ <strong>Cẩn thận!</strong> Các thao tác này sẽ thay đổi lịch sử commit.
+                </div>
+                <div class="form-group">
+                    <label>Chọn phiên bản (commit hash hoặc nhánh)</label>
+                    <div class="input-row">
+                        <input type="text" v-model="resetTarget" class="form-input mono" placeholder="Ví dụ: main, HEAD~1, abc1234" @keyup.enter="showResetConfirm = true">
+                        <button class="btn btn-primary btn-sm" @click="showResetConfirm = true" :disabled="!resetTarget.trim()">🔍 Chọn</button>
+                    </div>
+                </div>
+
+                <!-- Current commits list for quick selection -->
+                <div style="margin-bottom:8px;font-size:12px;color:var(--text-muted)">Hoặc chọn từ danh sách commit gần đây:</div>
+                <div v-if="commitLog.length > 0" class="reset-commit-list">
+                    <div v-for="c in commitLog.slice(0, 10)" :key="c.full_hash || c.hash"
+                         class="reset-commit-item" @click="resetTarget = c.hash; showResetConfirm = true">
+                        <span class="mono" style="color:var(--accent)">[[ c.hash ]]</span>
+                        <span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">[[ c.message ]]</span>
+                        <span style="color:var(--text-muted);font-size:11px">[[ c.date ]]</span>
+                    </div>
+                </div>
+
+                <!-- Reset options -->
+                <div v-if="showResetConfirm" class="reset-options">
+                    <div class="reset-option" @click="executeReset('soft')">
+                        <div class="reset-option-icon">🟢</div>
+                        <div class="reset-option-info">
+                            <strong>Soft Reset</strong>
+                            <span>Giữ nguyên toàn bộ thay đổi trong working directory và staging area</span>
+                        </div>
+                    </div>
+                    <div class="reset-option" @click="executeReset('mixed')">
+                        <div class="reset-option-icon">🟡</div>
+                        <div class="reset-option-info">
+                            <strong>Mixed Reset (mặc định)</strong>
+                            <span>Giữ thay đổi trong working directory, xóa staging area</span>
+                        </div>
+                    </div>
+                    <div class="reset-option reset-option-danger" @click="confirmHardReset">
+                        <div class="reset-option-icon">🔴</div>
+                        <div class="reset-option-info">
+                            <strong>Hard Reset ⚠️</strong>
+                            <span>Mất hết thay đổi! Xóa tất cả thay đổi chưa commit, trở về đúng phiên bản cũ</span>
+                        </div>
+                    </div>
+                    <div class="reset-option" @click="confirmRevert">
+                        <div class="reset-option-icon">↩️</div>
+                        <div class="reset-option-info">
+                            <strong>Revert Commit</strong>
+                            <span>Tạo commit mới để hoàn tác commit đã chọn (an toàn, không mất lịch sử)</span>
+                        </div>
+                    </div>
+                </div>
+
+                <div v-if="resetResult" class="result-box" :class="resetResult.success ? 'success' : 'error'">
+                    <pre>[[ resetResult.message || resetResult.stdout || resetResult.stderr ]]</pre>
+                    <div v-if="!resetResult.success" class="error-suggestion">💡 [[ analyzeGitError(resetResult) ]]</div>
+                </div>
+            </div>
+
             <!-- GitKraken-style: File Tree + Graph + Changes -->
             <div v-if="isGitRepo" class="repo-content">
                 <!-- File tree sidebar -->
@@ -366,7 +436,10 @@
                                         </div>
                                     </div>
                                     <div class="graph-actions" v-if="row.hash" @click.stop>
-                                        <button class="btn btn-xs" @click.stop="checkoutCommit(row.hash)" title="Checkout">🔀</button>
+                                        <button class="btn btn-xs" @click.stop="checkoutCommit(row.hash)" title="Checkout commit này">🔀</button>
+                                        <button class="btn btn-xs" @click.stop="resetToCommit(row.hash, 'soft')" title="Reset soft (giữ nguyên thay đổi)">🔽</button>
+                                        <button class="btn btn-xs" @click.stop="resetToCommit(row.hash, 'mixed')" title="Reset mixed (bỏ stage)">⏹</button>
+                                        <button class="btn btn-xs btn-danger" @click.stop="resetToCommit(row.hash, 'hard')" title="⚠️ Reset hard (mất hết thay đổi)">⏏️</button>
                                     </div>
                                 </div>
                             </div>

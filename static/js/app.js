@@ -34,6 +34,12 @@ const app = createApp({
         const fileContent = ref('');
         const fileContentLoading = ref(false);
 
+        // Reset / Restore
+        const showResetPanel = ref(false);
+        const resetTarget = ref('');
+        const showResetConfirm = ref(false);
+        const resetResult = ref(null);
+
         // Git graph
         const graphData = ref([]);
         const graphRowHeight = 24;
@@ -94,6 +100,7 @@ const app = createApp({
         const commitMessage = ref('');
         const commitDescription = ref('');
         const commitResult = ref(null);
+        const autoPushAfterCommit = ref(false);
         const stagedCount = computed(() => {
             return projectStatus.value.files ? projectStatus.value.files.filter(f =>
                 ['Staged', 'Staged+Modified', 'Added'].includes(f.status)
@@ -197,6 +204,39 @@ const app = createApp({
                     executePull();
                 }
             });
+
+            // ── Auto-refresh ──
+            // Refresh selected project status/log/graph every 30s
+            setInterval(async () => {
+                if (!selectedProject.value) return;
+                try {
+                    const status = await api(`/api/projects/${selectedProject.value.id}/status`);
+                    projectStatus.value = status;
+                    updateProjectStatus(selectedProject.value.id, status);
+                } catch (_) {}
+                try {
+                    const log = await gitCmd(selectedProject.value.id, 'log', { limit: 30 });
+                    commitLog.value = Array.isArray(log) ? log : [];
+                } catch (_) {}
+                try {
+                    const g = await gitCmd(selectedProject.value.id, 'graph', { limit: 50, all: true });
+                    graphData.value = Array.isArray(g) ? g : [];
+                } catch (_) {}
+                try {
+                    const bs = await gitCmd(selectedProject.value.id, 'branch_list');
+                    branches.value = Array.isArray(bs) ? bs : [];
+                } catch (_) {}
+                try {
+                    const rs = await gitCmd(selectedProject.value.id, 'remote_list');
+                    remotes.value = Array.isArray(rs) ? rs : [];
+                } catch (_) {}
+                selectedBranch.value = projectStatus.value.branch || '';
+            }, 30000);
+
+            // Refresh project list (dashboard status dots) every 60s
+            setInterval(async () => {
+                await loadProjects();
+            }, 60000);
         });
 
         watch(navTab, (tab) => {
@@ -349,12 +389,77 @@ const app = createApp({
         }
 
         async function checkoutCommit(hash) {
-            if (!confirm(`Checkout commit ${hash}? (trạng thái HEAD detached)`)) return;
+            if (!confirm(`Checkout commit ${hash}?\n(trạng thái HEAD detached - bạn sẽ không ở trên nhánh nào)`)) return;
             try {
                 const d = await gitCmd(selectedProject.value.id, 'custom', { command: `checkout ${hash}` });
                 if (d.success) { toast(`Đã checkout ${hash}`, 'success'); await selectProject(selectedProject.value); }
                 else toast('Checkout thất bại', 'error');
             } catch (e) { toast(e.message, 'error'); }
+        }
+
+        // ── Reset / Restore ──
+        async function resetToCommit(hash, mode) {
+            resetTarget.value = hash;
+            showResetConfirm.value = true;
+            showResetPanel.value = true;
+            // Auto-trigger for quick button clicks
+            if (mode === 'soft' || mode === 'mixed') {
+                if (confirm(`⚠️ Reset ${mode} về commit ${hash}?\n\n` + (mode === 'soft' ? 'Giữ nguyên thay đổi (an toàn)' : 'Bỏ stage, giữ thay đổi trong file'))) {
+                    await executeReset(mode);
+                }
+            } else if (mode === 'hard') {
+                await confirmHardReset();
+            }
+        }
+
+        async function executeReset(mode) {
+            const target = resetTarget.value.trim();
+            if (!target) { toast('Nhập commit hash hoặc nhánh', 'error'); return; }
+            const modeNames = { soft: 'Soft', mixed: 'Mixed', hard: 'Hard' };
+            resetResult.value = null;
+            try {
+                const d = await gitCmd(selectedProject.value.id, 'reset', { mode, target });
+                resetResult.value = d;
+                if (d.success) {
+                    toast(`✅ Reset ${modeNames[mode] || mode} về ${target} thành công!`, 'success');
+                    showResetConfirm.value = false;
+                    showResetPanel.value = false;
+                    await selectProject(selectedProject.value);
+                } else {
+                    toast('Reset thất bại', 'error');
+                }
+            } catch (e) { resetResult.value = { success: false, message: e.message }; }
+        }
+
+        async function confirmHardReset() {
+            const target = resetTarget.value.trim();
+            if (!target) { toast('Nhập commit hash hoặc nhánh', 'error'); return; }
+            const msg = `⚠️⚠️⚠️ CẢNH BÁO: HARD RESET ⚠️⚠️⚠️\n\nBạn sắp mất TẤT CẢ thay đổi chưa commit!\n\nReset về: ${target}\n\nNhập "CONFIRM" để xác nhận:`;
+            const confirm2 = prompt(msg);
+            if (confirm2 === 'CONFIRM') {
+                await executeReset('hard');
+            } else {
+                toast('Nhập "CONFIRM" để xác nhận Hard Reset', 'error');
+            }
+        }
+
+        async function confirmRevert() {
+            const target = resetTarget.value.trim();
+            if (!target) { toast('Nhập commit hash', 'error'); return; }
+            if (!confirm(`Tạo commit mới để hoàn tác (revert) commit ${target}?`)) return;
+            resetResult.value = null;
+            try {
+                const d = await gitCmd(selectedProject.value.id, 'custom', { command: `revert --no-edit ${target}` });
+                resetResult.value = d;
+                if (d.success) {
+                    toast(`✅ Đã revert commit ${target}!`, 'success');
+                    showResetConfirm.value = false;
+                    showResetPanel.value = false;
+                    await selectProject(selectedProject.value);
+                } else {
+                    toast('Revert thất bại', 'error');
+                }
+            } catch (e) { resetResult.value = { success: false, message: e.message }; }
         }
 
         function copyText(text) {
@@ -509,7 +614,27 @@ const app = createApp({
                 if (commitDescription.value.trim()) msg += '\n\n' + commitDescription.value.trim();
                 const data = await gitCmd(selectedProject.value.id, 'commit', { message: msg });
                 commitResult.value = data;
-                if (data.success) { toast('Commit OK', 'success'); commitMessage.value = ''; commitDescription.value = ''; await refreshStatus(); const log = await gitCmd(selectedProject.value.id, 'log', { limit: 30 }); commitLog.value = Array.isArray(log) ? log : []; }
+                if (data.success) {
+                    toast('✅ Commit thành công!', 'success');
+                    commitMessage.value = ''; commitDescription.value = '';
+                    await refreshStatus();
+                    const log = await gitCmd(selectedProject.value.id, 'log', { limit: 30 }); commitLog.value = Array.isArray(log) ? log : [];
+                    // Auto push or offer to push
+                    if (remotes.value.length > 0) {
+                        if (autoPushAfterCommit.value) {
+                            setTimeout(() => executePush(), 500);
+                            toast('⬆️ Đang tự động đẩy lên remote...', 'info');
+                        } else {
+                            setTimeout(() => {
+                                if (confirm('✅ Commit thành công!\n\n⬆️ Đẩy lên remote ngay bây giờ?')) {
+                                    executePush();
+                                }
+                            }, 300);
+                        }
+                    }
+                } else {
+                    toast('Commit thất bại', 'error');
+                }
             } catch (e) { commitResult.value = { success: false, message: e.message }; }
         }
 
@@ -699,13 +824,15 @@ const app = createApp({
             syncResult, syncing,
             fileTree, fileTreeLoading, viewingFile, fileContent, fileContentLoading, isReadmeFile, viewFileContent,
             showCommitPanel, showBranchPanel,
-            commitMessage, commitDescription, commitResult, stagedCount,
+            commitMessage, commitDescription, commitResult, stagedCount, autoPushAfterCommit,
             newBranchName, branchResult, mergeSourceBranch, merging, mergeBranchInto, executeMerge,
             newRemoteName, newRemoteUrl, creatingRemote,
             initGitLoading, initResult, isGitRepo, gitConnectionClass,
             showReleasesPanel, newReleaseTag, newReleaseDesc, releases, releaseResult,
             fetchReleases, createRelease, deleteRelease,
             graphData, graphRowHeight, selectedCommit, contextMenu, commitNodeClass, formatDateVerbose, showContextMenu, openFileInExplorer, checkoutCommit, fetchGraph, renderGraphSegments,
+            showResetPanel, resetTarget, showResetConfirm, resetResult,
+            resetToCommit, executeReset, confirmHardReset, confirmRevert,
             diffContent, diffFile,
             showAddModal, showSettingsModal, addTab,
             cloneForm, createForm, cloning, creating, cloneProgress, createProgress,
