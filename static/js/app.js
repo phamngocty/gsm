@@ -103,6 +103,15 @@ const app = createApp({
         // Branch
         const newBranchName = ref('');
         const branchResult = ref(null);
+        const mergeSourceBranch = ref('');
+        const merging = ref(false);
+
+        // Releases
+        const showReleasesPanel = ref(false);
+        const newReleaseTag = ref('');
+        const newReleaseDesc = ref('');
+        const releases = ref([]);
+        const releaseResult = ref(null);
 
         // Remote
         const newRemoteName = ref('origin');
@@ -267,6 +276,9 @@ const app = createApp({
                 { match: /nothing added to commit/i, hint: '📝 Chưa có file nào được stage.\n👉 Cách fix: Dùng "Stage tất cả" hoặc stage từng file.' },
                 { match: /please tell me who you are/i, hint: '👤 Chưa cấu hình Git user.\n👉 Cách fix: Chạy lệnh:\ngit config user.email "email@example.com"\ngit config user.name "Tên của bạn"' },
                 { match: /commit before pull/i, hint: '💾 Có commit local chưa được push.\n👉 Cách fix: Commit trước hoặc dùng "git stash" để tạm cất.' },
+
+                // Push: no upstream
+                { match: /(no upstream branch|no upstream|has no upstream)/i, hint: '🌿 Nhánh hiện tại chưa có upstream.\n👉 Đã tự động thêm --set-upstream. Lần sau Push sẽ hoạt động bình thường.' },
 
                 // Branch errors
                 { match: /(did not match any file|pathspec.*did not match)/i, hint: '🔍 Không tìm thấy file hoặc nhánh này.\n👉 Cách fix: Kiểm tra lại tên đường dẫn hoặc tên nhánh.' },
@@ -519,6 +531,67 @@ const app = createApp({
         async function refreshBranches() { if (!selectedProject.value) return; try { const b = await gitCmd(selectedProject.value.id, 'branch_list'); branches.value = Array.isArray(b) ? b : []; } catch (e) { branches.value = []; } }
         async function refreshLog() { if (!selectedProject.value) return; try { const l = await gitCmd(selectedProject.value.id, 'log', { limit: 30 }); commitLog.value = Array.isArray(l) ? l : []; } catch (e) { commitLog.value = []; } }
 
+        // ── Merge ──
+        function mergeBranchInto(name) {
+            mergeSourceBranch.value = name;
+        }
+        async function executeMerge() {
+            if (!mergeSourceBranch.value || !selectedProject.value) return;
+            merging.value = true; branchResult.value = null;
+            try {
+                const d = await gitCmd(selectedProject.value.id, 'merge', { branch: mergeSourceBranch.value });
+                branchResult.value = d;
+                if (d.success) { toast('Merge thành công!', 'success'); mergeSourceBranch.value = ''; await refreshBranches(); await refreshStatus(); await refreshLog(); }
+                else toast('Merge thất bại', 'error');
+            } catch (e) { branchResult.value = { success: false, message: e.message }; }
+            finally { merging.value = false; }
+        }
+
+        // ── Releases ──
+        async function fetchReleases() {
+            if (!selectedProject.value) return;
+            try {
+                const tags = await gitCmd(selectedProject.value.id, 'tag_list');
+                releases.value = Array.isArray(tags) ? tags.map(t => ({ name: t, full_hash: '', message: '' })) : [];
+                // Get details for each tag
+                for (const r of releases.value) {
+                    try {
+                        const log = await gitCmd(selectedProject.value.id, 'log', { limit: 1, branch: `tags/${r.name}` });
+                        if (Array.isArray(log) && log.length > 0) {
+                            r.full_hash = log[0].full_hash || log[0].hash || '';
+                            r.date = log[0].date || '';
+                            r.author = log[0].author || '';
+                        }
+                    } catch (e) { /* tag may not have commit info */ }
+                    // Try to get tag message
+                    try {
+                        const d = await gitCmd(selectedProject.value.id, 'custom', { command: `tag -l ${r.name} --format="%(contents)"` });
+                        if (d.success && d.stdout) r.message = d.stdout.substring(0, 500);
+                    } catch (e) {}
+                }
+            } catch (e) { releases.value = []; }
+        }
+        async function createRelease() {
+            const tag = newReleaseTag.value.trim(); const desc = newReleaseDesc.value.trim();
+            if (!tag) return;
+            releaseResult.value = null;
+            try {
+                const d = await gitCmd(selectedProject.value.id, 'tag_create', { name: tag, message: desc || `Release ${tag}` });
+                releaseResult.value = d;
+                if (d.success) { toast(`Đã tạo release ${tag}!`, 'success'); newReleaseTag.value = ''; newReleaseDesc.value = ''; await fetchReleases(); }
+                else toast('Tạo release thất bại', 'error');
+            } catch (e) { releaseResult.value = { success: false, message: e.message }; }
+        }
+        async function deleteRelease(tag) {
+            if (!confirm(`Xóa release "${tag}"?`)) return;
+            releaseResult.value = null;
+            try {
+                const d = await gitCmd(selectedProject.value.id, 'tag_delete', { name: tag });
+                releaseResult.value = d;
+                if (d.success) { toast('Đã xóa release', 'success'); await fetchReleases(); }
+            } catch (e) { releaseResult.value = { success: false, message: e.message }; }
+        }
+
         // ── Sync ──
         async function executePush() { syncing.value = 'push'; syncResult.value = null; try { const d = await gitCmd(selectedProject.value.id, 'push'); syncResult.value = d; if (d.success) toast('Push OK', 'success'); await refreshStatus(); } catch (e) { syncResult.value = { success: false, message: e.message }; } finally { syncing.value = null; } }
         async function executePull() { syncing.value = 'pull'; syncResult.value = null; try { const d = await gitCmd(selectedProject.value.id, 'pull'); syncResult.value = d; if (d.success) toast('Pull OK', 'success'); await refreshStatus(); await refreshLog(); } catch (e) { syncResult.value = { success: false, message: e.message }; } finally { syncing.value = null; } }
@@ -627,9 +700,11 @@ const app = createApp({
             fileTree, fileTreeLoading, viewingFile, fileContent, fileContentLoading, isReadmeFile, viewFileContent,
             showCommitPanel, showBranchPanel,
             commitMessage, commitDescription, commitResult, stagedCount,
-            newBranchName, branchResult,
+            newBranchName, branchResult, mergeSourceBranch, merging, mergeBranchInto, executeMerge,
             newRemoteName, newRemoteUrl, creatingRemote,
             initGitLoading, initResult, isGitRepo, gitConnectionClass,
+            showReleasesPanel, newReleaseTag, newReleaseDesc, releases, releaseResult,
+            fetchReleases, createRelease, deleteRelease,
             graphData, graphRowHeight, selectedCommit, contextMenu, commitNodeClass, formatDateVerbose, showContextMenu, openFileInExplorer, checkoutCommit, fetchGraph, renderGraphSegments,
             diffContent, diffFile,
             showAddModal, showSettingsModal, addTab,

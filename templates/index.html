@@ -183,6 +183,7 @@
                 <button class="abtn" @click="showBranchPanel = !showBranchPanel">🌿 Nhánh</button>
                 <button class="abtn" @click="executeFetch" :disabled="syncing">📥 Lấy về</button>
                 <button class="abtn" @click="executeStashPush">📦 Cất giữ</button>
+                <button class="abtn" @click="showReleasesPanel = !showReleasesPanel">🏷️ Releases</button>
                 <span class="abtn-info">📝 [[ stagedCount ]] đã stage</span>
             </div>
 
@@ -219,6 +220,10 @@
                 <pre>[[ branchResult.message || branchResult.stdout || branchResult.stderr ]]</pre>
                 <div v-if="!branchResult.success" class="error-suggestion">💡 [[ analyzeGitError(branchResult) ]]</div>
             </div>
+            <div v-if="releaseResult" class="result-box" :class="releaseResult.success ? 'success' : 'error'">
+                <pre>[[ releaseResult.message || releaseResult.stdout || releaseResult.stderr ]]</pre>
+                <div v-if="!releaseResult.success" class="error-suggestion">💡 [[ analyzeGitError(releaseResult) ]]</div>
+            </div>
 
             <!-- Commit Panel -->
             <div v-if="showCommitPanel" class="expand-panel">
@@ -234,10 +239,68 @@
             <!-- Branch Panel -->
             <div v-if="showBranchPanel" class="expand-panel">
                 <div class="expand-header"><h3>🌿 Nhánh</h3><button class="btn btn-close" @click="showBranchPanel = false">✖</button></div>
-                <div class="input-row" style="margin-bottom:8px"><input type="text" v-model="newBranchName" class="form-input" placeholder="Tên nhánh mới..." @keyup.enter="createBranch"><button class="btn btn-primary btn-sm" @click="createBranch">＋ Tạo</button></div>
-                <table class="file-table"><thead><tr><th>Nhánh</th><th width="160">Thao tác</th></tr></thead>
-                    <tbody><tr v-for="b in branches" :key="b.name"><td><span v-if="b.current" class="current-badge">⬅️</span> [[ b.name ]]<span v-if="b.remote" class="remote-badge">🌐</span></td><td><button class="btn btn-xs" @click="switchBranch(b.name)" :disabled="b.current">🔀</button><button class="btn btn-xs" @click="deleteBranch(b.name)" :disabled="b.current || b.remote">🗑</button></td></tr></tbody>
+                <div class="input-row" style="margin-bottom:8px">
+                    <input type="text" v-model="newBranchName" class="form-input" placeholder="Tên nhánh mới..." @keyup.enter="createBranch">
+                    <button class="btn btn-primary btn-sm" @click="createBranch">＋ Tạo</button>
+                </div>
+                <table class="file-table"><thead><tr><th>Nhánh</th><th width="200">Thao tác</th></tr></thead>
+                    <tbody><tr v-for="b in branches" :key="b.name">
+                        <td><span v-if="b.current" class="current-badge">⬅️</span> [[ b.name ]]<span v-if="b.remote" class="remote-badge">🌐</span></td>
+                        <td>
+                            <button class="btn btn-xs" @click="switchBranch(b.name)" :disabled="b.current">🔀 Chuyển</button>
+                            <button class="btn btn-xs" @click="deleteBranch(b.name)" :disabled="b.current || b.remote">🗑 Xóa</button>
+                            <button class="btn btn-xs" @click="mergeBranchInto(b.name)" :disabled="b.current || b.remote" title="Merge vào nhánh hiện tại">🔗 Merge</button>
+                        </td>
+                    </tr></tbody>
                 </table>
+                <div v-if="mergeSourceBranch" style="margin-top:8px;padding:8px;background:var(--bg-primary);border-radius:var(--radius)">
+                    <span>🔀 Merge <strong>[[ mergeSourceBranch ]]</strong> vào <strong>[[ projectStatus.branch ]]</strong></span>
+                    <button class="btn btn-primary btn-sm" style="margin-left:8px" @click="executeMerge" :disabled="merging">[[ merging ? '⏳...' : '🔀 Merge' ]]</button>
+                    <button class="btn btn-xs" @click="mergeSourceBranch = ''" style="margin-left:4px">✖ Hủy</button>
+                </div>
+            </div>
+
+            <!-- Releases Panel -->
+            <div v-if="showReleasesPanel" class="expand-panel">
+                <div class="expand-header">
+                    <h3>🏷️ Releases</h3>
+                    <div style="display:flex;gap:6px">
+                        <button class="btn btn-secondary btn-sm" @click="fetchReleases">🔄</button>
+                    </div>
+                </div>
+
+                <!-- Create release -->
+                <div class="release-create" style="margin-bottom:12px">
+                    <div class="form-group">
+                        <label>Tên tag (vd: v1.0.0)</label>
+                        <input type="text" v-model="newReleaseTag" class="form-input" placeholder="v1.0.0">
+                    </div>
+                    <div class="form-group">
+                        <label>Mô tả release</label>
+                        <textarea v-model="newReleaseDesc" class="form-input" placeholder="Mô tả các thay đổi..." rows="3"></textarea>
+                    </div>
+                    <div style="display:flex;gap:8px;align-items:center">
+                        <button class="btn btn-primary btn-sm" @click="createRelease" :disabled="!newReleaseTag.trim()">🏷️ Tạo release</button>
+                        <button class="btn btn-xs" @click="newReleaseTag = ''; newReleaseDesc = ''">✖ Hủy</button>
+                    </div>
+                </div>
+
+                <!-- Releases list -->
+                <div v-if="releases.length > 0">
+                    <div v-for="rel in releases" :key="rel.name" class="release-item">
+                        <div class="release-header">
+                            <span class="release-tag">🏷️ [[ rel.name ]]</span>
+                            <span class="release-commit" v-if="rel.full_hash">🔗 [[ rel.full_hash.substring(0,8) ]]</span>
+                            <div style="flex:1"></div>
+                            <button class="btn btn-xs" @click="copyText('git checkout tags/' + rel.name)" title="Copy checkout command">📋</button>
+                            <button class="btn btn-xs btn-danger" @click="deleteRelease(rel.name)" title="Xóa release">🗑</button>
+                        </div>
+                        <div class="release-body" v-if="rel.message">
+                            <pre class="release-desc">[[ rel.message ]]</pre>
+                        </div>
+                    </div>
+                </div>
+                <div v-else class="status-clean">Chưa có release nào. Tạo tag/release để đánh dấu phiên bản.</div>
             </div>
 
             <!-- GitKraken-style: File Tree + Graph + Changes -->

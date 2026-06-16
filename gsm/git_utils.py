@@ -161,9 +161,24 @@ def git_commit(project_path: str, message: str) -> dict:
 
 
 def git_push(project_path: str, remote: str = "origin", branch: str = "") -> dict:
+    """Push to remote. Auto-retry with --set-upstream if no upstream configured."""
     args = ["push", remote]
     if branch: args.append(branch)
-    return _run_git_lines(args, cwd=project_path)
+    result = _run_git_lines(args, cwd=project_path)
+
+    # If failed due to no upstream, auto-retry with --set-upstream
+    if not result.get("success"):
+        stderr = (result.get("stderr") or "").lower()
+        if "no upstream" in stderr or "no upstream branch" in stderr:
+            # Get current branch if not specified
+            if not branch:
+                r = _run_git(["rev-parse", "--abbrev-ref", "HEAD"], cwd=project_path)
+                if r.returncode == 0:
+                    branch = r.stdout.strip()
+            if branch and branch != "HEAD":
+                retry_args = ["push", "--set-upstream", remote, branch]
+                result = _run_git_lines(retry_args, cwd=project_path)
+    return result
 
 
 def git_pull(project_path: str, remote: str = "origin", branch: str = "") -> dict:
