@@ -890,7 +890,12 @@ const app = createApp({
             if (!selectedProject.value) return;
             syncing.value = 'push'; syncResult.value = null;
             try {
-                const d = await gitCmd(selectedProject.value.id, 'push', { force });
+                const resp = await fetch(`/api/projects/${selectedProject.value.id}/git/push`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ force })
+                });
+                const d = await resp.json();
                 syncResult.value = d;
                 if (d.success) {
                     toast('✅ Push thành công!', 'success');
@@ -901,7 +906,12 @@ const app = createApp({
                     if (stderr.includes('non-fast-forward') || stderr.includes('rejected')) {
                         if (!force && confirm('⚠️ Remote có commit mới hơn local.\n\n➡️ Nhấn OK để Pull về trước, sau đó tự động Push lại.\n❌ Nhấn Cancel để huỷ.')) {
                             toast('⏳ Đang kéo về và hợp nhất...', 'info');
-                            const pullResult = await gitCmd(selectedProject.value.id, 'pull');
+                            const pullResp = await fetch(`/api/projects/${selectedProject.value.id}/git/pull`, {
+                                method: 'POST',
+                                headers: { 'Content-Type': 'application/json' },
+                                body: JSON.stringify({})
+                            });
+                            const pullResult = await pullResp.json();
                             if (pullResult.success) {
                                 toast('✅ Pull thành công! Đang đẩy lên lại...', 'success');
                                 await executePush(false);
