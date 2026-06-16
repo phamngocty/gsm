@@ -212,6 +212,10 @@
             <div v-if="syncResult" class="result-box" :class="syncResult.success ? 'success' : 'error'">
                 <pre>[[ syncResult.message || syncResult.stdout || syncResult.stderr ]]</pre>
                 <div v-if="!syncResult.success" class="error-suggestion">💡 [[ analyzeGitError(syncResult) ]]</div>
+                <div v-if="!syncResult.success && (syncResult.stderr || '').toLowerCase().includes('non-fast-forward')" class="result-actions" style="margin-top:8px">
+                    <button class="btn btn-secondary btn-sm" @click="executePull()">⬇️ Kéo về (Pull)</button>
+                    <button class="btn btn-sm" style="border-color:var(--red);color:var(--red)" @click="executePush(true)">⏏️ Force Push</button>
+                </div>
             </div>
             <div v-if="commitResult" class="result-box" :class="commitResult.success ? 'success' : 'error'">
                 <pre>[[ commitResult.message || commitResult.stdout || commitResult.stderr ]]</pre>

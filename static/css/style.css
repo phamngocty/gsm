@@ -323,6 +323,9 @@ body { font-family: var(--font); background: var(--bg-primary); color: var(--tex
 .context-menu-item.danger { color: var(--red); }
 .context-menu-sep { height: 1px; background: var(--border); margin: 4px 8px; }
 
+/* ─── Result actions ─── */
+.result-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+
 /* ─── README ─── */
 .readme-content { background: var(--bg-primary); border: 1px solid var(--border); border-radius: var(--radius); padding: 16px; font-size: 13px; line-height: 1.6; white-space: pre-wrap; color: var(--text-primary); }
 

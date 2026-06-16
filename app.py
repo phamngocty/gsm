@@ -233,7 +233,7 @@ def api_git_command(project_id, cmd):
         "unstage_file":  lambda: git_unstage_file(path, data.get("file", "")),
         "stage_all":     lambda: git_stage_all(path),
         "commit":        lambda: git_commit(path, data.get("message", "")),
-        "push":          lambda: git_push(path, data.get("remote", "origin"), data.get("branch", "")),
+        "push":          lambda: git_push(path, data.get("remote", "origin"), data.get("branch", ""), data.get("force", False)),
         "pull":          lambda: git_pull(path, data.get("remote", "origin"), data.get("branch", "")),
         "fetch":         lambda: git_fetch(path, data.get("remote", "")),
         "branch_list":   lambda: jsonify(git_branch_list(path)),

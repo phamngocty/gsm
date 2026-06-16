@@ -718,7 +718,39 @@ const app = createApp({
         }
 
         // ── Sync ──
-        async function executePush() { syncing.value = 'push'; syncResult.value = null; try { const d = await gitCmd(selectedProject.value.id, 'push'); syncResult.value = d; if (d.success) toast('Push OK', 'success'); await refreshStatus(); } catch (e) { syncResult.value = { success: false, message: e.message }; } finally { syncing.value = null; } }
+        async function executePush(force = false) {
+            if (!selectedProject.value) return;
+            syncing.value = 'push'; syncResult.value = null;
+            try {
+                const d = await gitCmd(selectedProject.value.id, 'push', { force });
+                syncResult.value = d;
+                if (d.success) {
+                    toast('✅ Push thành công!', 'success');
+                    await refreshStatus();
+                } else {
+                    const stderr = (d.stderr || d.stdout || '').toLowerCase();
+                    // Auto pull & retry on non-fast-forward
+                    if (stderr.includes('non-fast-forward') || stderr.includes('rejected')) {
+                        if (!force && confirm('⚠️ Remote có commit mới hơn local.\n\n➡️ Nhấn OK để Pull về trước, sau đó tự động Push lại.\n❌ Nhấn Cancel để huỷ.')) {
+                            toast('⏳ Đang kéo về và hợp nhất...', 'info');
+                            const pullResult = await gitCmd(selectedProject.value.id, 'pull');
+                            if (pullResult.success) {
+                                toast('✅ Pull thành công! Đang đẩy lên lại...', 'success');
+                                await executePush(false);
+                                return;
+                            } else {
+                                // Pull failed (maybe conflict), show the push error instead
+                                syncResult.value = d;
+                                toast('❗ Pull thất bại — có thể do xung đột. Kiểm tra kết quả để biết thêm chi tiết.', 'error');
+                            }
+                        } else if (!force) {
+                            toast('Push bị từ chối', 'error');
+                        }
+                    }
+                }
+            } catch (e) { syncResult.value = { success: false, message: e.message }; }
+            finally { syncing.value = null; }
+        }
         async function executePull() { syncing.value = 'pull'; syncResult.value = null; try { const d = await gitCmd(selectedProject.value.id, 'pull'); syncResult.value = d; if (d.success) toast('Pull OK', 'success'); await refreshStatus(); await refreshLog(); } catch (e) { syncResult.value = { success: false, message: e.message }; } finally { syncing.value = null; } }
         async function executeFetch() { syncing.value = 'fetch'; syncResult.value = null; try { const d = await gitCmd(selectedProject.value.id, 'fetch'); syncResult.value = d; if (d.success) toast('Fetch OK', 'success'); await refreshStatus(); } catch (e) { syncResult.value = { success: false, message: e.message }; } finally { syncing.value = null; } }
         async function executeStashPush() { try { const d = await gitCmd(selectedProject.value.id, 'stash_push'); if (d.success) { toast('Stash OK', 'success'); await refreshStatus(); } } catch (e) { toast(e.message, 'error'); } }

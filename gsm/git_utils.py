@@ -160,9 +160,12 @@ def git_commit(project_path: str, message: str) -> dict:
     return _run_git_lines(["commit", "-m", message], cwd=project_path)
 
 
-def git_push(project_path: str, remote: str = "origin", branch: str = "") -> dict:
+def git_push(project_path: str, remote: str = "origin", branch: str = "", force: bool = False) -> dict:
     """Push to remote. Auto-retry with --set-upstream if no upstream configured."""
-    args = ["push", remote]
+    args = ["push"]
+    if force:
+        args.append("--force")
+    args.append(remote)
     if branch: args.append(branch)
     result = _run_git_lines(args, cwd=project_path)
 
