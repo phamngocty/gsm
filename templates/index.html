@@ -196,6 +196,7 @@
                 </div>
                 <div class="repo-header-actions">
                     <button class="btn btn-primary" @click="openInFork" :disabled="!settings.fork_path">🔓 Fork</button>
+                    <button class="btn btn-secondary" @click="createPullRequest" :disabled="!selectedProject.github_remote && !selectedProject.gitea_remote" title="Tạo Pull Request trên GitHub/Gitea">🔀 Tạo PR</button>
                     <button class="btn btn-danger" @click="deleteProject">🗑 Xóa</button>
                 </div>
             </div>
@@ -292,6 +293,7 @@
                             <button class="btn btn-xs" @click="switchBranch(b.name)" :disabled="b.current">🔀 Chuyển</button>
                             <button class="btn btn-xs" @click="deleteBranch(b.name)" :disabled="b.current || b.remote">🗑 Xóa</button>
                             <button class="btn btn-xs" @click="mergeBranchInto(b.name)" :disabled="b.current || b.remote" title="Merge vào nhánh hiện tại">🔗 Merge</button>
+                            <button class="btn btn-xs" @click="rebaseBranch(b.name)" :disabled="b.current || b.remote" title="Rebase nhánh này lên nhánh hiện tại (⚠️ nguy hiểm)">🔃 Rebase</button>
                         </td>
                     </tr></tbody>
                 </table>
@@ -503,6 +505,7 @@
                                     <td>
                                         <button class="btn btn-xs" @click="viewDiff(file.path)" title="Xem diff">📄</button>
                                         <button class="btn btn-xs" @click="openFileInExplorer(file.path)" title="Mở file">📂</button>
+                                        <button class="btn btn-xs" @click="blameFile(file.path)" title="Blame file">🔍</button>
                                     </td>
                                 </tr></tbody>
                             </table>
