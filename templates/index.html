@@ -155,6 +155,18 @@
                         <span class="meta-item" v-if="!isGitRepo">⏳ Chưa có Git</span>
                         <span class="meta-item" v-else-if="gitConnectionClass === 'connected'">✅ Đã kết nối</span>
                     </div>
+                    <!-- Quick branch switcher -->
+                    <div v-if="isGitRepo && branches.length > 1" class="branch-chips">
+                        <span class="branch-chip-label">🌿 Nhánh:</span>
+                        <span v-for="b in branches" :key="b.name"
+                              class="branch-chip"
+                              :class="{ 'branch-chip-current': b.current, 'branch-chip-remote': b.remote && !b.current }"
+                              @click="switchBranch(b.name)"
+                              :title="b.current ? 'Đang ở nhánh này' : (b.remote ? 'Remote: ' + b.name : 'Chuyển sang ' + b.name)">
+                            [[ b.name ]]
+                            <span v-if="b.current" class="branch-chip-check">✓</span>
+                        </span>
+                    </div>
                 </div>
                 <div class="repo-header-actions">
                     <button class="btn btn-primary" @click="openInFork" :disabled="!settings.fork_path">🔓 Fork</button>
@@ -180,7 +192,7 @@
                 <button class="abtn" @click="executePull" :disabled="syncing">⬇️ Kéo về</button>
                 <button class="abtn" @click="executePush" :disabled="syncing">⬆️ Đẩy lên</button>
                 <button class="abtn" @click="showCommitPanel = !showCommitPanel">💾 Lưu commit</button>
-                <button class="abtn" @click="showBranchPanel = !showBranchPanel">🌿 Nhánh</button>
+                <button class="abtn" @click="showBranchPanel = !showBranchPanel">🌿 Quản lý nhánh</button>
                 <button class="abtn" @click="executeFetch" :disabled="syncing">📥 Lấy về</button>
                 <button class="abtn" @click="executeStashPush">📦 Cất giữ</button>
                 <button class="abtn" @click="showReleasesPanel = !showReleasesPanel">🏷️ Releases</button>
@@ -292,7 +304,7 @@
                         <button class="btn btn-xs" @click="newReleaseTag = ''; newReleaseDesc = ''">✖ Hủy</button>
                     </div>
                     <div v-if="remotes.length > 0" style="margin-top:6px;font-size:11px;color:var(--text-muted)">
-                        ⬆️ Tag sẽ được hỏi để đẩy lên remote sau khi tạo.
+                        ⬆️ Tag sẽ tự động được đẩy lên remote và tạo Release trên Gitea (nếu có).
                     </div>
                     <div v-else style="margin-top:6px;font-size:11px;color:var(--text-muted)">
                         📡 Chưa có remote — tag chỉ tồn tại ở local. Thêm remote để đẩy lên Gitea/GitHub.
@@ -388,13 +400,30 @@
             <div v-if="isGitRepo" class="repo-content">
                 <!-- File tree sidebar -->
                 <div class="file-tree-panel">
-                    <div class="file-tree-header">📂 Thư mục</div>
+                    <div class="file-tree-header">
+                        <span>📂 Thư mục</span>
+                        <span class="file-tree-count" v-if="fileTree.length">[[ fileTree.length ]] files</span>
+                    </div>
                     <div v-if="fileTreeLoading" class="file-tree-loading">⏳</div>
                     <div v-else class="file-tree-list">
-                        <div v-for="item in fileTree" :key="item.path" class="tree-item" :style="{ paddingLeft: (item.path.split('/').length - 1) * 16 + 'px' }"
-                             @click="viewFileContent(item)" :class="{ active: viewingFile === item.path }">
-                            <span v-if="item.type === 'dir'">📁</span>
-                            <span v-else>📄</span>
+                        <div v-for="(item, idx) in fileTree" :key="item.path"
+                             class="tree-item"
+                             :class="{ 'tree-item-dir': item.type === 'dir', 'tree-item-file': item.type !== 'dir', 'tree-item-active': viewingFile === item.path, 'tree-item-dragover': dragOverPath === item.path }"
+                             :style="{ paddingLeft: (item.path.split('/').length - 1) * 20 + 8 + 'px' }"
+                             @click="onTreeItemClick(item)"
+                             draggable="true"
+                             @dragstart="onTreeDragStart($event, item)"
+                             @dragover.prevent="onTreeDragOver($event, item)"
+                             @dragleave="onTreeDragLeave($event)"
+                             @drop.prevent="onTreeDrop($event, item)"
+                             :title="item.path">
+                            <!-- Connector lines -->
+                            <span class="tree-connector" v-if="idx < fileTree.length - 1">├──</span>
+                            <span class="tree-connector tree-connector-last" v-else>└──</span>
+                            <!-- Icon with file-type color -->
+                            <span v-if="item.type === 'dir'" class="tree-icon tree-icon-dir">📁</span>
+                            <span v-else class="tree-icon" :class="'tree-icon-' + fileIconClass(item.name)">[[ fileIcon(item.name) ]]</span>
+                            <!-- Name -->
                             <span class="tree-item-name">[[ item.name ]]</span>
                         </div>
                         <div v-if="fileTree.length === 0" class="file-tree-empty">(empty repo)</div>

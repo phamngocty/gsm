@@ -26,7 +26,7 @@ from gsm.git_utils import (
 )
 from gsm.api_utils import (
     check_github_token, check_gitea_token, check_gitea_password,
-    create_github_repo, create_gitea_repo,
+    create_github_repo, create_gitea_repo, create_gitea_release,
     list_gitea_repos, list_gitea_repos_basic_auth,
 )
 
@@ -374,6 +374,42 @@ def _run_simple_git_result(cwd: str, *args: str) -> dict:
         r = subprocess.run(["git", *args], cwd=cwd, capture_output=True, text=True, timeout=30)
         return {"success": r.returncode == 0, "stdout": r.stdout.strip(), "stderr": r.stderr.strip()}
     except Exception as e: return {"success": False, "stderr": str(e)}
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+#  API: GITEA RELEASE
+# ═══════════════════════════════════════════════════════════════════════════
+
+@app.route("/api/projects/<project_id>/gitea-release", methods=["POST"])
+def api_create_gitea_release(project_id):
+    from urllib.parse import urlparse
+    project = _find_project(project_id)
+    if not project: return jsonify({"error": "Không tìm thấy"}), 404
+    gitea_url = project.get("gitea_remote", "")
+    if not gitea_url: return jsonify({"error": "Chưa có remote Gitea"}), 400
+
+    settings = load_settings()
+    token = get_token("gitea_token") or ""
+    server_url = settings.get("gitea_server_url", "").rstrip("/")
+    if not token or not server_url: return jsonify({"error": "Chưa cấu hình Gitea token"}), 400
+
+    # Parse owner/repo from remote URL
+    # e.g. http://192.168.1.114:3002/nas152/gsm.git → owner=nas152, repo=gsm
+    parsed = urlparse(gitea_url)
+    parts = parsed.path.strip("/").rstrip(".git").split("/")
+    if len(parts) < 2: return jsonify({"error": "URL remote không hợp lệ"}), 400
+    owner, repo = parts[-2], parts[-1]
+
+    data = request.get_json(force=True) or {}
+    tag_name = data.get("tag_name", "")
+    name = data.get("name", tag_name)
+    body = data.get("body", "")
+    if not tag_name: return jsonify({"error": "Thiếu tên tag"}), 400
+
+    result = create_gitea_release(token, server_url, owner, repo, tag_name, name, body)
+    if result:
+        return jsonify({"success": True, "release": result, "html_url": result.get("html_url", "")})
+    return jsonify({"error": "Tạo release trên Gitea thất bại"}), 400
 
 
 # ═══════════════════════════════════════════════════════════════════════════

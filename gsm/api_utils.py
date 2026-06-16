@@ -118,3 +118,29 @@ def list_gitea_repos_basic_auth(server_url: str, username: str, password: str) -
         return []
     except requests.RequestException:
         return []
+
+
+def create_gitea_release(token: str, server_url: str, owner: str, repo: str,
+                         tag_name: str, name: str = "", body: str = "",
+                         draft: bool = False, prerelease: bool = False) -> Optional[dict]:
+    """Create a Release on Gitea via API."""
+    server_url = server_url.rstrip("/")
+    try:
+        resp = requests.post(
+            f"{server_url}/api/v1/repos/{owner}/{repo}/releases",
+            headers={"Authorization": f"token {token}"},
+            json={
+                "tag_name": tag_name,
+                "name": name or tag_name,
+                "body": body,
+                "draft": draft,
+                "prerelease": prerelease,
+                "auto_init": True,
+            },
+            timeout=15,
+        )
+        if resp.status_code in (200, 201):
+            return resp.json()
+        return None
+    except requests.RequestException:
+        return None

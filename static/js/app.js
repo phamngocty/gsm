@@ -337,6 +337,10 @@ const app = createApp({
                 // Tag errors
                 { match: /(is not a valid tag name|tag.*already)/i, hint: '🏷️ Tên tag không hợp lệ hoặc đã tồn tại.\n👉 Cách fix: Dùng tên không dấu cách, vd: v1.0.0 hoặc v1.0.0-beta' },
 
+                // Checkout / Switch branch errors (local changes would be overwritten)
+                { match: /your local changes to the following files would be overwritten by checkout/i, hint: '📝 Có thay đổi chưa commit sẽ bị ghi đè khi chuyển nhánh.\n👉 Cách fix: Commit trước (💾 Lưu commit) hoặc dùng "Cất giữ" (📦 Stash) để tạm cất thay đổi, sau đó chuyển nhánh.' },
+                { match: /your local changes to the following files would be overwritten by merge/i, hint: '📝 Có thay đổi chưa commit sẽ bị ghi đè khi merge.\n👉 Cách fix: Commit trước hoặc dùng Stash để tạm cất thay đổi.' },
+
                 // General
                 { match: /has no commits yet/i, hint: '📂 Repository chưa có commit nào.\n👉 Cách fix: Tạo file mới, stage và commit lần đầu tiên.' },
                 { match: /is beyond/i, hint: '⚠️ Lỗi không xác định.\n👉 Cách fix: Kiểm tra lại thao tác hoặc thử làm mới (Refresh).' },
@@ -350,7 +354,7 @@ const app = createApp({
             if (originalMsg) {
                 // Truncate long messages for display
                 const display = originalMsg.length > 120 ? originalMsg.substring(0, 120) + '...' : originalMsg;
-                return '❌ ' + display;
+                return '⚠️ ' + display + '\n👉 Hãy kiểm tra lại thao tác hoặc commit/stage file trước khi thực hiện.';
             }
 
             // Generic fallback
@@ -547,6 +551,9 @@ const app = createApp({
         }
 
         // ── File Tree ──
+        // File tree state
+        const dragOverPath = ref(null);
+
         async function loadFileTree() {
             if (!selectedProject.value || !isGitRepo.value) return;
             fileTreeLoading.value = true;
@@ -559,6 +566,86 @@ const app = createApp({
 
         function isReadmeFile(path) {
             return path.toLowerCase().includes('readme');
+        }
+
+        function fileIcon(name) {
+            const ext = name.includes('.') ? name.split('.').pop().toLowerCase() : '';
+            const icons = {
+                js: '🟨', ts: '🟦', py: '🐍', html: '🟧', css: '🟪', json: '{ }',
+                md: '📝', txt: '📄', xml: '🔶', yml: '🔹', yaml: '🔹',
+                sh: '⚡', bat: '⚡', ps1: '⚡', exe: '⚙️', dll: '⚙️',
+                png: '🖼️', jpg: '🖼️', jpeg: '🖼️', gif: '🖼️', svg: '🖼️',
+                ico: '🖼️', woff: '🔤', woff2: '🔤', ttf: '🔤', eot: '🔤',
+                pyc: '⚫', pyd: '⚫', so: '⚫', class: '☕', java: '☕',
+            };
+            return icons[ext] || (name.startsWith('.') ? '⚙️' : '📄');
+        }
+        function fileIconClass(name) {
+            const ext = name.includes('.') ? name.split('.').pop().toLowerCase() : '';
+            const classes = {
+                js: 'js', ts: 'ts', py: 'py', html: 'html', css: 'css', json: 'json',
+                md: 'md', xml: 'xml', yml: 'yml', yaml: 'yml',
+                png: 'img', jpg: 'img', jpeg: 'img', gif: 'img', svg: 'img',
+                pyc: 'bin', pyd: 'bin', so: 'bin', exe: 'bin', dll: 'bin',
+                class: 'java', java: 'java',
+            };
+            return classes[ext] || (name.startsWith('.') ? 'hidden' : 'generic');
+        }
+
+        function onTreeItemClick(item) {
+            if (item.type === 'dir') {
+                // Toggle directory expansion by clicking again? For now just show content if possible
+                return;
+            }
+            viewFileContent(item);
+        }
+
+        // ── Drag & Drop for file tree ──
+        let draggedItem = null;
+        function onTreeDragStart(event, item) {
+            draggedItem = item;
+            event.dataTransfer.effectAllowed = 'move';
+            event.dataTransfer.setData('text/plain', item.path);
+        }
+        function onTreeDragOver(event, item) {
+            if (!draggedItem || draggedItem.path === item.path) return;
+            dragOverPath.value = item.path;
+        }
+        function onTreeDragLeave(event) {
+            dragOverPath.value = null;
+        }
+        async function onTreeDrop(event, targetItem) {
+            dragOverPath.value = null;
+            if (!draggedItem || draggedItem.path === targetItem.path) {
+                draggedItem = null;
+                return;
+            }
+            // For git: move/rename file using git mv
+            const src = draggedItem.path;
+            let dest;
+            if (targetItem.type === 'dir') {
+                dest = targetItem.path + '/' + draggedItem.name;
+            } else {
+                // Target is a file — move to same dir with different name? Ask user via rename
+                toast('Kéo thả: thả vào thư mục để di chuyển file vào đó', 'info');
+                draggedItem = null;
+                return;
+            }
+            if (!confirm(`Di chuyển "${src}" → "${dest}"?`)) {
+                draggedItem = null;
+                return;
+            }
+            try {
+                const d = await gitCmd(selectedProject.value.id, 'custom', { command: `mv "${src}" "${dest}"` });
+                if (d.success) {
+                    toast(`✅ Đã di chuyển "${src}"`, 'success');
+                    await loadFileTree();
+                    await refreshStatus();
+                } else {
+                    toast('❌ Di chuyển thất bại: ' + (d.stderr || ''), 'error');
+                }
+            } catch (e) { toast(e.message, 'error'); }
+            draggedItem = null;
         }
 
         async function viewFileContent(item) {
@@ -720,15 +807,33 @@ const app = createApp({
                 const d = await gitCmd(selectedProject.value.id, 'tag_create', { name: tag, message: desc || `Release ${tag}` });
                 releaseResult.value = d;
                 if (d.success) {
-                    toast(`Đã tạo release ${tag}!`, 'success');
                     newReleaseTag.value = ''; newReleaseDesc.value = '';
                     await fetchReleases();
-                    // Push tag to remote if available
-                    const hasRemote = remotes.value.length > 0;
-                    if (hasRemote && await confirm(`📤 Đẩy tag "${tag}" lên remote ngay bây giờ?\n(Nếu không, tag chỉ tồn tại ở local)`)) {
+
+                    // Auto push tag to remote
+                    if (remotes.value.length > 0) {
                         const pushResult = await gitCmd(selectedProject.value.id, 'push_tag', { tag, remote: 'origin' });
-                        if (pushResult.success) toast(`✅ Tag ${tag} đã được đẩy lên remote!`, 'success');
-                        else toast('⚠️ Đẩy tag thất bại — bạn có thể thử lại sau', 'error');
+                        if (pushResult.success) {
+                            toast(`✅ Tag ${tag} đã được đẩy lên remote!`, 'success');
+                        } else {
+                            toast('⚠️ Đẩy tag thất bại', 'error');
+                        }
+                    }
+
+                    // Auto create Release on Gitea
+                    if (selectedProject.value.gitea_remote) {
+                        try {
+                            const rel = await api(`/api/projects/${selectedProject.value.id}/gitea-release`, {
+                                method: 'POST',
+                                body: JSON.stringify({ tag_name: tag, name: tag, body: desc || `Release ${tag}` })
+                            });
+                            if (rel.success) {
+                                toast(`🎉 Đã tạo Release trên Gitea!`, 'success');
+                            }
+                        } catch (e) {
+                            // Gitea release creation is optional, don't block
+                            console.warn('Gitea release creation failed:', e.message);
+                        }
                     }
                 }
                 else toast('Tạo release thất bại', 'error');
@@ -891,6 +996,8 @@ const app = createApp({
             projectStatus, commitLog, branches, remotes, remoteMap,
             syncResult, syncing,
             fileTree, fileTreeLoading, viewingFile, fileContent, fileContentLoading, isReadmeFile, viewFileContent,
+            fileIcon, fileIconClass, onTreeItemClick,
+            dragOverPath, onTreeDragStart, onTreeDragOver, onTreeDragLeave, onTreeDrop,
             showCommitPanel, showBranchPanel,
             commitMessage, commitDescription, commitResult, stagedCount, autoPushAfterCommit,
             newBranchName, branchResult, mergeSourceBranch, merging, mergeBranchInto, executeMerge,
