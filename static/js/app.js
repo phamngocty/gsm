@@ -419,6 +419,10 @@ const app = createApp({
                 { match: /your local changes to the following files would be overwritten by checkout/i, hint: '📝 Có thay đổi chưa commit sẽ bị ghi đè khi chuyển nhánh.\n👉 Cách fix: Commit trước (💾 Lưu commit) hoặc dùng "Cất giữ" (📦 Stash) để tạm cất thay đổi, sau đó chuyển nhánh.' },
                 { match: /your local changes to the following files would be overwritten by merge/i, hint: '📝 Có thay đổi chưa commit sẽ bị ghi đè khi merge.\n👉 Cách fix: Commit trước hoặc dùng Stash để tạm cất thay đổi.' },
 
+                // Detached HEAD / not on a branch
+                { match: /(not currently on a branch|detached head|detached HEAD)/i, hint: '⚠️ Bạn đang ở trạng thái "Detached HEAD" — không ở trên nhánh nào.\n👉 Cách fix: Dùng "Chuyển nhánh" (switch) về nhánh cũ hoặc tạo nhánh mới tại đây: git switch -c ten-nhanh-moi' },
+                { match: /(would be overwritten by checkout|local changes.*overwritten)/i, hint: '📝 Có thay đổi chưa commit sẽ bị ghi đè khi chuyển nhánh.\n👉 Cách fix: Commit trước (💾 Lưu commit) hoặc dùng "Cất giữ" (📦 Stash).' },
+
                 // General
                 { match: /has no commits yet/i, hint: '📂 Repository chưa có commit nào.\n👉 Cách fix: Tạo file mới, stage và commit lần đầu tiên.' },
                 { match: /is beyond/i, hint: '⚠️ Lỗi không xác định.\n👉 Cách fix: Kiểm tra lại thao tác hoặc thử làm mới (Refresh).' },

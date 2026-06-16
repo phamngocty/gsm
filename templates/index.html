@@ -6,7 +6,8 @@
     <div class="topbar-left">
         <span class="logo">◆</span>
         <h1 class="app-title">{{ app_name }}</h1>
-        <span v-if="selectedProject" class="current-branch">🌿 [[ selectedBranch ]]</span>
+        <span v-if="selectedProject && selectedBranch === 'HEAD'" class="current-branch" style="color:var(--red)">⚠️ Detached HEAD ([[ selectedBranch ]])</span>
+        <span v-else-if="selectedProject" class="current-branch">🌿 [[ selectedBranch ]]</span>
     </div>
     <div class="topbar-center">
         <input type="text" class="search-input" v-model="searchQuery" placeholder="🔍 Tìm kiếm..." @input="filterProjects">
