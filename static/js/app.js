@@ -247,7 +247,13 @@ const app = createApp({
         async function api(url, options = {}) {
             const resp = await fetch(url, { headers: { 'Content-Type': 'application/json' }, ...options });
             const data = await resp.json();
-            if (!resp.ok) throw new Error(data.error || 'Request failed');
+            if (!resp.ok) {
+                const errMsg = data.error
+                    || data.stderr?.substring(0, 200)
+                    || data.message
+                    || `Request failed (${resp.status})`;
+                throw new Error(errMsg);
+            }
             return data;
         }
 
@@ -292,8 +298,8 @@ const app = createApp({
 
         // ── Error Analysis ──
         function analyzeGitError(result) {
-            const msg = (result.message || result.stderr || result.stdout || '').toLowerCase();
-            const originalMsg = result.message || result.stderr || result.stdout || '';
+            const msg = (result.error || result.message || result.stderr || result.stdout || '').toLowerCase();
+            const originalMsg = result.error || result.message || result.stderr || result.stdout || '';
 
             const patterns = [
                 // Push errors
@@ -328,6 +334,9 @@ const app = createApp({
                 // Stash errors
                 { match: /no stash found/i, hint: '📦 Không có stash nào để phục hồi.\n👉 Cách fix: Dùng "Cất giữ" (Stash) trước để lưu thay đổi tạm thời.' },
 
+                // Tag errors
+                { match: /(is not a valid tag name|tag.*already)/i, hint: '🏷️ Tên tag không hợp lệ hoặc đã tồn tại.\n👉 Cách fix: Dùng tên không dấu cách, vd: v1.0.0 hoặc v1.0.0-beta' },
+
                 // General
                 { match: /has no commits yet/i, hint: '📂 Repository chưa có commit nào.\n👉 Cách fix: Tạo file mới, stage và commit lần đầu tiên.' },
                 { match: /is beyond/i, hint: '⚠️ Lỗi không xác định.\n👉 Cách fix: Kiểm tra lại thao tác hoặc thử làm mới (Refresh).' },
@@ -335,6 +344,13 @@ const app = createApp({
 
             for (const p of patterns) {
                 if (p.match.test(msg)) return p.hint;
+            }
+
+            // Show the actual error if nothing else matched
+            if (originalMsg) {
+                // Truncate long messages for display
+                const display = originalMsg.length > 120 ? originalMsg.substring(0, 120) + '...' : originalMsg;
+                return '❌ ' + display;
             }
 
             // Generic fallback

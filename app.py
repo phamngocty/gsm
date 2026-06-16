@@ -217,6 +217,9 @@ def _require_project(project_id: str, require_git: bool = True):
 
 def _git_result(result: dict):
     if result.get("success"): return jsonify(result), 200
+    # Ensure error field is set for frontend
+    if "error" not in result:
+        result["error"] = (result.get("stderr") or result.get("stdout") or "").strip() or "Git command failed"
     return jsonify(result), 400
 
 
