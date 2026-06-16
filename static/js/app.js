@@ -717,7 +717,20 @@ const app = createApp({
             try {
                 const d = await gitCmd(selectedProject.value.id, 'merge', { branch: mergeSourceBranch.value });
                 branchResult.value = d;
-                if (d.success) { toast('Merge thành công!', 'success'); mergeSourceBranch.value = ''; await refreshBranches(); await refreshStatus(); await refreshLog(); }
+                if (d.success) {
+                    toast('✅ Merge thành công!', 'success');
+                    const mergedBranch = mergeSourceBranch.value;
+                    mergeSourceBranch.value = '';
+                    await refreshBranches(); await refreshStatus(); await refreshLog();
+                    // Suggest deleting the merged branch
+                    if (!mergedBranch.startsWith('remotes/') && mergedBranch !== projectStatus.value.branch) {
+                        setTimeout(() => {
+                            if (confirm(`🧹 Nhánh "${mergedBranch}" đã được merge.\n\nXóa nhánh "${mergedBranch}" để dọn dẹp?`)) {
+                                deleteBranch(mergedBranch);
+                            }
+                        }, 500);
+                    }
+                }
                 else toast('Merge thất bại', 'error');
             } catch (e) { branchResult.value = { success: false, message: e.message }; }
             finally { merging.value = false; }
@@ -810,12 +823,49 @@ const app = createApp({
             finally { creatingRemote.value = null; }
         }
 
-        // ── Fork / Delete ──
+        // ── Fork / Delete / PR / Blame / Rebase ──
         async function openInFork() { if (!selectedProject.value) return; try { await api(`/api/projects/${selectedProject.value.id}/open`, { method: 'POST' }); toast('Đã mở Fork', 'success'); } catch (e) { toast(e.message, 'error'); } }
         async function deleteProject() {
             if (!selectedProject.value) return;
             const rml = confirm(`Xóa "${selectedProject.value.name}"?\nOK = xóa cả thư mục`);
             try { await api(`/api/projects/${selectedProject.value.id}`, { method: 'DELETE', body: JSON.stringify({ remove_local: rml }) }); toast('Đã xóa', 'success'); selectedProject.value = null; await loadProjects(); } catch (e) { toast(e.message, 'error'); }
+        }
+        function createPullRequest() {
+            const proj = selectedProject.value;
+            if (!proj) return;
+            // Determine remote URL and construct compare URL
+            const remoteUrl = proj.github_remote || proj.gitea_remote;
+            if (!remoteUrl) { toast('Chưa có remote GitHub/Gitea', 'error'); return; }
+            const branch = projectStatus.value.branch || 'main';
+            let url = '';
+            if (proj.github_remote) {
+                // GitHub: https://github.com/owner/repo/compare/main...feature?expand=1
+                const m = remoteUrl.match(/github\.com[:\/](.+?)\/(.+?)(?:\.git)?$/);
+                if (m) url = `https://github.com/${m[1]}/${m[2]}/compare/${branch}?expand=1`;
+            } else if (proj.gitea_remote) {
+                // Gitea: http://server/owner/repo/compare/main...feature
+                const m = remoteUrl.match(/https?:\/\/[^\/]+(.+?)\.git$/);
+                if (m) url = remoteUrl.replace(/\.git$/, '') + `/compare/${branch}?expand=1`;
+            }
+            if (url) { window.open(url, '_blank'); toast('Đã mở trang tạo Pull Request', 'success'); }
+            else toast('Không thể xác định URL remote', 'error');
+        }
+        function blameFile(filePath) {
+            if (!selectedProject.value || !settings.value.fork_path) { toast('Cần cấu hình Fork trong Cài đặt', 'error'); return; }
+            // Open Fork with blame for the file
+            try { api(`/api/projects/${selectedProject.value.id}/open`, { method: 'POST', body: JSON.stringify({ action: 'blame', file: filePath }) }); toast('Đã mở Fork - Blame', 'success'); } catch (e) { toast(e.message, 'error'); }
+        }
+        async function rebaseBranch(branch) {
+            if (!selectedProject.value) return;
+            const target = projectStatus.value.branch || 'main';
+            const msg = `⚠️ CẢNH BÁO: Rebase là thao tác NGUY HIỂM!\n\nSẽ rebase nhánh "${branch}" lên "${target}".\nChỉ thực hiện nếu bạn hiểu rõ hậu quả.\n\nNhập "REBASE" để xác nhận:`;
+            const confirm2 = prompt(msg);
+            if (confirm2 !== 'REBASE') { toast('Nhập "REBASE" để xác nhận', 'error'); return; }
+            try {
+                const d = await gitCmd(selectedProject.value.id, 'custom', { command: `rebase ${target} ${branch}` });
+                if (d.success) { toast(`✅ Rebase ${branch} lên ${target} thành công!`, 'success'); await selectProject(selectedProject.value); }
+                else toast('Rebase thất bại', 'error');
+            } catch (e) { toast(e.message, 'error'); }
         }
 
         // ── Clone / Create ──
@@ -897,7 +947,7 @@ const app = createApp({
             executeCommit, createBranch, switchBranch, deleteBranch,
             executePush, executePull, executeFetch, executeStashPush,
             addRemote, updateRemoteUrl, removeRemoteByName, createAndPushRemote,
-            openInFork, deleteProject,
+            openInFork, deleteProject, createPullRequest, blameFile, rebaseBranch,
             submitClone, submitCreate,
             openGiteaTab, fetchGiteaRepos, importGiteaRepo, cloneGiteaRepo, fetchDashboardGiteaRepos,
             initGitRepo,
