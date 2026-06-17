@@ -21,6 +21,7 @@ def get_app_data_dir() -> Path:
 DATA_DIR = get_app_data_dir()
 PROJECTS_FILE = DATA_DIR / "projects.json"
 SETTINGS_FILE = DATA_DIR / "settings.json"
+CREDENTIALS_FILE = DATA_DIR / "credentials.json"
 
 KEYRING_SERVICE = "gsm"
 KEYRING_KEYS = {

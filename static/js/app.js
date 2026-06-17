@@ -306,6 +306,11 @@ const app = createApp({
                 settings.value = data;
                 formSettings.value.gitea_server_url = data.gitea_server_url || '';
                 formSettings.value.fork_path = data.fork_path || '';
+                // Show saved indicators for credentials (actual values stay in keyring)
+                formSettings.value.github_token = data.has_github_token ? '••••••••' : '';
+                formSettings.value.gitea_token = data.has_gitea_token ? '••••••••' : '';
+                formSettings.value.gitea_username = data.has_gitea_username ? '••••••••' : '';
+                formSettings.value.gitea_password = data.has_gitea_password ? '••••••••' : '';
             } catch (e) {}
         }
 
@@ -603,6 +608,8 @@ const app = createApp({
             try { const status = await api(`/api/projects/${proj.id}/status`); projectStatus.value = status; updateProjectStatus(proj.id, status); } catch (e) {}
             try { const log = await gitCmd(proj.id, 'log', { limit: 30 }); commitLog.value = Array.isArray(log) ? log : []; } catch (e) {}
             try { const g = await gitCmd(proj.id, 'graph', { limit: 50, all: true }); graphData.value = Array.isArray(g) ? g : []; } catch (e) { graphData.value = []; }
+            // Fetch remote refs so remote branches appear
+            try { await gitCmd(proj.id, 'fetch'); } catch (e) {}
             try { const bs = await gitCmd(proj.id, 'branch_list'); branches.value = Array.isArray(bs) ? bs : []; } catch (e) {}
             try { const rs = await gitCmd(proj.id, 'remote_list'); remotes.value = Array.isArray(rs) ? rs : []; } catch (e) {}
             loadFileTree();
@@ -1111,7 +1118,13 @@ const app = createApp({
             try { const d = await api('/api/settings/check-token', { method: 'POST', body: JSON.stringify({ platform: 'gitea_password', username: gitea_username, password: gitea_password }) }); tokenResults.value.password = d.valid; if (d.valid) toast(`Login OK (${d.info?.username || ''})`, 'success'); else toast('Sai user/pass', 'error'); } catch (e) { tokenResults.value.password = false; toast(e.message, 'error'); } finally { checking.value.password = false; }
         }
         async function saveSettings() {
-            try { await api('/api/settings', { method: 'POST', body: JSON.stringify(formSettings.value) }); toast('Đã lưu', 'success'); await loadSettings(); closeSettings(); } catch (e) { toast(e.message, 'error'); }
+            // Only send fields that the user actually changed (skip placeholder values)
+            const payload = { ...formSettings.value };
+            if (payload.github_token === '••••••••') delete payload.github_token;
+            if (payload.gitea_token === '••••••••') delete payload.gitea_token;
+            if (payload.gitea_username === '••••••••') delete payload.gitea_username;
+            if (payload.gitea_password === '••••••••') delete payload.gitea_password;
+            try { await api('/api/settings', { method: 'POST', body: JSON.stringify(payload) }); toast('Đã lưu', 'success'); await loadSettings(); closeSettings(); } catch (e) { toast(e.message, 'error'); }
         }
         function openAddModal() { showSettingsModal.value = false; showAddModal.value = true; addTab.value = 'clone'; cloneForm.value = { url: '', targetDir: '' }; createForm.value = { name: '', description: '', private: false, github: true, gitea: true, targetDir: '' }; cloneProgress.value = ''; createProgress.value = ''; }
         function closeAddModal() { showAddModal.value = false; }
