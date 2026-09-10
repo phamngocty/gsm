@@ -149,7 +149,11 @@ const app = createApp({
         // Releases
         const showReleasesPanel = ref(false);
         const newReleaseTag = ref('');
+        const newReleaseTitle = ref('');
         const newReleaseDesc = ref('');
+        const releaseTargetGithub = ref(true);
+        const releaseTargetGitea = ref(true);
+        const standardReleaseLoading = ref(false);
         const releases = ref([]);
         const releaseResult = ref(null);
 
@@ -946,45 +950,82 @@ const app = createApp({
                 }
             } catch (e) { releases.value = []; }
         }
+        async function toggleProjectOta() {
+            if (!selectedProject.value) return;
+            try {
+                const res = await api(`/api/projects/${selectedProject.value.id}/toggle-ota`, { method: 'POST' });
+                if (res.success) {
+                    selectedProject.value.enable_ota = res.enable_ota;
+                    toast(res.enable_ota ? '🚀 Đã bật tiện ích Firmware OTA cho dự án này!' : 'Đã tắt tiện ích OTA cho dự án này.', 'success');
+                }
+            } catch (e) {
+                toast(e.message, 'error');
+            }
+        }
+
         async function createRelease() {
-            const tag = newReleaseTag.value.trim(); const desc = newReleaseDesc.value.trim();
-            if (!tag) return;
+            const tag = newReleaseTag.value.trim();
+            const title = newReleaseTitle.value.trim() || tag;
+            const desc = newReleaseDesc.value.trim() || `Release ${tag}`;
+            if (!tag) {
+                toast('Vui lòng nhập tên tag!', 'error');
+                return;
+            }
+            standardReleaseLoading.value = true;
             releaseResult.value = null;
             try {
-                const d = await gitCmd(selectedProject.value.id, 'tag_create', { name: tag, message: desc || `Release ${tag}` });
+                // 1. Create local Git tag
+                const d = await gitCmd(selectedProject.value.id, 'tag_create', { name: tag, message: desc });
                 releaseResult.value = d;
-                if (d.success) {
-                    newReleaseTag.value = ''; newReleaseDesc.value = '';
-                    await fetchReleases();
+                if (!d.success) throw new Error(d.error || 'Lỗi tạo tag git');
 
-                    // Auto push tag to remote
-                    if (remotes.value.length > 0) {
-                        const pushResult = await gitCmd(selectedProject.value.id, 'push_tag', { tag, remote: 'origin' });
+                newReleaseTag.value = '';
+                newReleaseTitle.value = '';
+                newReleaseDesc.value = '';
+                await fetchReleases();
+
+                // 2. Push tag to all configured remotes
+                for (const r of remotes.value) {
+                    try {
+                        const pushResult = await gitCmd(selectedProject.value.id, 'push_tag', { tag, remote: r.name });
                         if (pushResult.success) {
-                            toast(`✅ Tag ${tag} đã được đẩy lên remote!`, 'success');
-                        } else {
-                            toast('⚠️ Đẩy tag thất bại', 'error');
+                            toast(`✅ Tag ${tag} đã được đẩy lên remote ${r.name}!`, 'success');
                         }
-                    }
+                    } catch (e) {}
+                }
 
-                    // Auto create Release on Gitea
-                    if (selectedProject.value.gitea_remote) {
-                        try {
-                            const rel = await api(`/api/projects/${selectedProject.value.id}/gitea-release`, {
-                                method: 'POST',
-                                body: JSON.stringify({ tag_name: tag, name: tag, body: desc || `Release ${tag}` })
-                            });
-                            if (rel.success) {
-                                toast(`🎉 Đã tạo Release trên Gitea!`, 'success');
-                            }
-                        } catch (e) {
-                            // Gitea release creation is optional, don't block
-                            console.warn('Gitea release creation failed:', e.message);
-                        }
+                // 3. Create Release on Gitea if enabled
+                if (releaseTargetGitea.value && selectedProject.value.gitea_remote) {
+                    try {
+                        const rel = await api(`/api/projects/${selectedProject.value.id}/gitea-release`, {
+                            method: 'POST',
+                            body: JSON.stringify({ tag_name: tag, name: title, body: desc })
+                        });
+                        if (rel.success) toast(`🎉 Đã tạo Release trên Gitea!`, 'success');
+                    } catch (e) {
+                        console.warn('Gitea release error:', e.message);
                     }
                 }
-                else toast('Tạo release thất bại', 'error');
-            } catch (e) { releaseResult.value = { success: false, message: e.message }; }
+
+                // 4. Create Release on GitHub if enabled
+                if (releaseTargetGithub.value && selectedProject.value.github_remote) {
+                    try {
+                        const rel = await api(`/api/projects/${selectedProject.value.id}/github-release`, {
+                            method: 'POST',
+                            body: JSON.stringify({ tag_name: tag, name: title, body: desc })
+                        });
+                        if (rel.success) toast(`🎉 Đã tạo Release trên GitHub!`, 'success');
+                    } catch (e) {
+                        console.warn('GitHub release error:', e.message);
+                    }
+                }
+                toast(`🎉 Xuất bản Release ${tag} thành công!`, 'success');
+            } catch (e) {
+                toast(e.message, 'error');
+                releaseResult.value = { success: false, message: e.message };
+            } finally {
+                standardReleaseLoading.value = false;
+            }
         }
         async function deleteRelease(tag) {
             if (!confirm(`Xóa release "${tag}"?`)) return;
@@ -1293,7 +1334,8 @@ const app = createApp({
             newBranchName, branchResult, mergeSourceBranch, merging, mergeBranchInto, executeMerge,
             newRemoteName, newRemoteUrl, creatingRemote,
             initGitLoading, initResult, isGitRepo, gitConnectionClass,
-            showReleasesPanel, newReleaseTag, newReleaseDesc, releases, releaseResult,
+            showReleasesPanel, newReleaseTag, newReleaseTitle, newReleaseDesc, releases, releaseResult,
+            releaseTargetGithub, releaseTargetGitea, standardReleaseLoading, toggleProjectOta,
             fetchReleases, createRelease, deleteRelease, pushReleaseTag,
             otaReleaseTag, otaAppVerCode, otaFwVerCode, otaApkPath, otaBinPath, otaOledBinPath, otaChangelog, otaLoading, otaDetecting, otaResult,
             browseOtaFile, submitOtaRelease, autoDetectOtaAssets,

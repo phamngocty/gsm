@@ -469,6 +469,34 @@ def api_create_gitea_release(project_id):
     return jsonify({"error": "Tạo release trên Gitea thất bại"}), 400
 
 
+@app.route("/api/projects/<project_id>/github-release", methods=["POST"])
+def api_create_github_release(project_id):
+    from urllib.parse import urlparse
+    project = _find_project(project_id)
+    if not project: return jsonify({"error": "Không tìm thấy"}), 404
+    github_url = project.get("github_remote", "")
+    if not github_url: return jsonify({"error": "Chưa có remote GitHub"}), 400
+
+    token = get_token("github_token") or ""
+    if not token: return jsonify({"error": "Chưa cấu hình GitHub token"}), 400
+
+    parsed = urlparse(github_url)
+    parts = parsed.path.strip("/").rstrip(".git").split("/")
+    if len(parts) < 2: return jsonify({"error": "URL remote không hợp lệ"}), 400
+    owner, repo = parts[-2], parts[-1]
+
+    data = request.get_json(force=True) or {}
+    tag_name = data.get("tag_name", "")
+    name = data.get("name", tag_name)
+    body = data.get("body", "")
+    if not tag_name: return jsonify({"error": "Thiếu tên tag"}), 400
+
+    result = create_github_release(token, owner, repo, tag_name, name, body)
+    if result:
+        return jsonify({"success": True, "release": result, "html_url": result.get("html_url", "")})
+    return jsonify({"error": "Tạo release trên GitHub thất bại"}), 400
+
+
 # ═══════════════════════════════════════════════════════════════════════════
 #  API: SETTINGS
 # ═══════════════════════════════════════════════════════════════════════════

@@ -367,16 +367,57 @@
             <!-- Releases Panel -->
             <div v-if="showReleasesPanel" class="expand-panel">
                 <div class="expand-header">
-                    <h3>🏷️ Releases</h3>
+                    <div style="display:flex;align-items:center;gap:12px">
+                        <h3>🏷️ Releases & Phiên bản</h3>
+                        <label class="checkbox-label" style="font-size:12px;cursor:pointer;color:var(--text-secondary)">
+                            <input type="checkbox" :checked="selectedProject.enable_ota" @change="toggleProjectOta">
+                            ⚙️ Bật tiện ích Firmware OTA (ESP32/APK)
+                        </label>
+                    </div>
                     <div style="display:flex;gap:6px">
                         <button class="btn btn-secondary btn-sm" @click="fetchReleases">🔄</button>
+                        <button class="btn btn-close" @click="showReleasesPanel = false">✖</button>
                     </div>
                 </div>
 
-                <!-- OTA Release Form -->
+                <!-- Standard Release Form (Cho mọi dự án) -->
                 <div class="release-create" style="margin-bottom:16px;padding:12px;background:var(--bg-secondary);border:1px solid var(--border-color);border-radius:var(--radius)">
+                    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
+                        <h4 style="margin:0;color:var(--text-primary)">🚀 Tạo Phiên Bản Release Mới</h4>
+                    </div>
+                    <div style="display:grid;grid-template-columns:1fr 2fr;gap:8px;margin-bottom:8px">
+                        <div class="form-group">
+                            <label>Tên Tag *</label>
+                            <input type="text" v-model="newReleaseTag" class="form-input" placeholder="v1.0.0">
+                        </div>
+                        <div class="form-group">
+                            <label>Tiêu đề Release</label>
+                            <input type="text" v-model="newReleaseTitle" class="form-input" placeholder="Ví dụ: Phiên bản 1.0.0 phát hành chính thức">
+                        </div>
+                    </div>
+                    <div class="form-group">
+                        <label>Ghi chú thay đổi (Release Notes / Changelog)</label>
+                        <textarea v-model="newReleaseDesc" class="form-input" rows="2" placeholder="Nội dung cập nhật, sửa lỗi, tính năng mới..."></textarea>
+                    </div>
+                    <div style="display:flex;justify-content:space-between;align-items:center;margin-top:8px">
+                        <div style="display:flex;gap:12px;align-items:center">
+                            <label class="checkbox-label" v-if="selectedProject.github_remote">
+                                <input type="checkbox" v-model="releaseTargetGithub"> Đẩy lên GitHub
+                            </label>
+                            <label class="checkbox-label" v-if="selectedProject.gitea_remote">
+                                <input type="checkbox" v-model="releaseTargetGitea"> Đẩy lên Gitea
+                            </label>
+                        </div>
+                        <button class="btn btn-primary" @click="createRelease" :disabled="!newReleaseTag.trim() || standardReleaseLoading">
+                            [[ standardReleaseLoading ? '⏳ Đang tạo release...' : '🚀 Xuất bản Release' ]]
+                        </button>
+                    </div>
+                </div>
+
+                <!-- OTA Release Form (Chỉ hiển thị khi bật tiện ích OTA) -->
+                <div v-if="selectedProject.enable_ota" class="release-create" style="margin-bottom:16px;padding:12px;background:var(--bg-secondary);border:1px dashed var(--accent);border-radius:var(--radius)">
                     <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">
-                        <h4 style="margin:0;color:var(--accent)">🚀 Phát hành Cập Nhật OTA (App APK & ESP32 Firmware)</h4>
+                        <h4 style="margin:0;color:var(--accent)">📡 Nạp Firmware Cập Nhật OTA (ESP32 & App APK)</h4>
                         <button class="btn btn-secondary btn-sm" @click="autoDetectOtaAssets" :disabled="otaDetecting">
                             [[ otaDetecting ? '🔍 Đang quét...' : '🔍 Tự Động Quét File Build' ]]
                         </button>
@@ -399,7 +440,7 @@
                         <label>Đường dẫn File Android App (.apk)</label>
                         <div class="input-row">
                             <input type="text" v-model="otaApkPath" class="form-input mono" placeholder="C:\...\TYMAP.apk">
-                            <button class="btn btn-secondary btn-sm" @click="browseOtaFile('apk')">📁 Duyệt file APK...</button>
+                            <button class="btn btn-secondary btn-sm" @click="browseOtaFile('apk')">📁 Duyệt APK...</button>
                         </div>
                     </div>
                     <div class="form-group">
@@ -438,8 +479,9 @@
                             <span class="release-tag">🏷️ [[ rel.name ]]</span>
                             <span class="release-commit" v-if="rel.full_hash">🔗 [[ rel.full_hash.substring(0,8) ]]</span>
                             <div style="flex:1"></div>
+                            <a :href="'/api/projects/' + selectedProject.id + '/archive-zip?ref=' + rel.name" class="btn btn-xs" title="Tải mã nguồn ZIP của bản release này" target="_blank" style="text-decoration:none">📥 Tải ZIP</a>
+                            <button class="btn btn-xs" @click="switchBranch(rel.name)" title="Chuyển sang commit của tag này">🔀 Checkout</button>
                             <button class="btn btn-xs" @click="pushReleaseTag(rel.name)" title="Đẩy tag lên remote">⬆️</button>
-                            <button class="btn btn-xs" @click="copyText('git checkout tags/' + rel.name)" title="Copy checkout command">📋</button>
                             <button class="btn btn-xs btn-danger" @click="deleteRelease(rel.name)" title="Xóa release">🗑</button>
                         </div>
                         <div class="release-body" v-if="rel.message">
