@@ -206,6 +206,18 @@ const app = createApp({
         const giteaImportProgress = ref('');
         const giteaImport = ref({ targetDir: '' });
 
+        // GitHub repos
+        const githubRepos = ref([]);
+        const githubSearchQuery = ref('');
+        const githubLoading = ref(false);
+        const githubError = ref('');
+        const githubImporting = ref(null);
+        const filteredGithubRepos = computed(() => {
+            if (!githubSearchQuery.value.trim()) return githubRepos.value;
+            const q = githubSearchQuery.value.toLowerCase();
+            return githubRepos.value.filter(r => (r.name || '').toLowerCase().includes(q) || (r.description || '').toLowerCase().includes(q));
+        });
+
         // ── Lifecycle ──
         onMounted(async () => {
             await loadProjects();
@@ -780,6 +792,39 @@ const app = createApp({
             finally { giteaImporting.value = null; }
         }
 
+        // ── GitHub ──
+        async function fetchDashboardGithubRepos() {
+            githubLoading.value = true;
+            githubError.value = '';
+            try {
+                const data = await api('/api/github/repos');
+                githubRepos.value = data.repos || [];
+            } catch (e) {
+                githubError.value = e.message;
+            } finally {
+                githubLoading.value = false;
+            }
+        }
+
+        async function cloneGithubRepo(repo) {
+            const targetDir = 'C:\\Projects\\' + repo.name;
+            githubImporting.value = repo.id;
+            try {
+                const data = await api('/api/github/repos/import', {
+                    method: 'POST',
+                    body: JSON.stringify({ clone_url: repo.clone_url, target_dir: targetDir })
+                });
+                toast(`Clone "${repo.name}" thành công!`, 'success');
+                await loadProjects();
+                const added = projects.value.find(p => p.path === targetDir);
+                if (added) await selectProject(added);
+            } catch (e) {
+                toast(e.message, 'error');
+            } finally {
+                githubImporting.value = null;
+            }
+        }
+
         // ── Stage / Diff ──
         async function stageFile(fp) { try { await gitCmd(selectedProject.value.id, 'stage_file', { file: fp }); await refreshStatus(); } catch (e) { toast(e.message, 'error'); } }
         async function unstageFile(fp) { try { await gitCmd(selectedProject.value.id, 'unstage_file', { file: fp }); await refreshStatus(); } catch (e) { toast(e.message, 'error'); } }
@@ -1144,6 +1189,96 @@ const app = createApp({
             setTimeout(() => { el.style.opacity = '0'; el.style.transform = 'translateX(100%)'; el.style.transition = 'all 0.3s ease'; setTimeout(() => el.remove(), 300); }, 3500);
         }
 
+        // ── OTA Release Management ──
+        const otaReleaseTag = ref('v1.0.1');
+        const otaAppVerCode = ref(1);
+        const otaFwVerCode = ref(1);
+        const otaApkPath = ref('d:\\Documents\\PlatformIO\\Tdriver\\TYMAP\\app\\build\\outputs\\apk\\debug\\app-debug.apk');
+        const otaBinPath = ref('d:\\Documents\\PlatformIO\\Tdriver\\TYMAP\\firmware\\esp32_s3_gc9a01\\.pio\\build\\esp32-s3-devkitc-1\\firmware.bin');
+        const otaOledBinPath = ref('d:\\Documents\\PlatformIO\\Tdriver\\TYMAP\\firmware\\esp32_c3_oled\\.pio\\build\\esp32-c3-devkitm-1\\firmware.bin');
+        const otaChangelog = ref('• Cập nhật ứng dụng TYMAP & Firmware ESP32 mới.\n• Tối ưu hóa Bluetooth BLE kết nối ổn định.');
+        const otaLoading = ref(false);
+        const otaDetecting = ref(false);
+        const otaResult = ref(null);
+
+        async function autoDetectOtaAssets() {
+            if (!selectedProject.value) return;
+            otaDetecting.value = true;
+            try {
+                const resp = await fetch(`/api/projects/${selectedProject.value.id}/ota-detect`);
+                const data = await resp.json();
+                if (data.apk_path) otaApkPath.value = data.apk_path;
+                if (data.bin_path) otaBinPath.value = data.bin_path;
+                if (data.oled_bin_path) otaOledBinPath.value = data.oled_bin_path;
+                if (data.suggested_tag) otaReleaseTag.value = data.suggested_tag;
+                if (data.suggested_app_code) otaAppVerCode.value = data.suggested_app_code;
+                if (data.suggested_fw_code) otaFwVerCode.value = data.suggested_fw_code;
+                if (data.changelog) otaChangelog.value = data.changelog;
+                toast('🔍 Đã tự động phát hiện các file build!', 'success');
+            } catch (e) {
+                console.warn('OTA detect error:', e);
+            } finally {
+                otaDetecting.value = false;
+            }
+        }
+
+        async function browseOtaFile(type) {
+            try {
+                const resp = await fetch('/api/browse-file', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ type: type })
+                });
+                const data = await resp.json();
+                if (data.file_path) {
+                    if (type === 'apk') otaApkPath.value = data.file_path;
+                    if (type === 'bin') otaBinPath.value = data.file_path;
+                    if (type === 'oled_bin') otaOledBinPath.value = data.file_path;
+                }
+            } catch (e) {
+                toast('Lỗi duyệt file: ' + e.message, 'error');
+            }
+        }
+
+        async function submitOtaRelease() {
+            if (!selectedProject.value) return;
+            if (!otaReleaseTag.value.trim()) {
+                toast('Vui lòng nhập Tag Name (ví dụ: v1.0.1)', 'error');
+                return;
+            }
+            otaLoading.value = true;
+            otaResult.value = null;
+            try {
+                const resp = await fetch(`/api/projects/${selectedProject.value.id}/ota-release`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        tag_name: otaReleaseTag.value.trim(),
+                        release_name: otaReleaseTag.value.trim(),
+                        changelog: otaChangelog.value,
+                        apk_path: otaApkPath.value,
+                        bin_path: otaBinPath.value,
+                        oled_bin_path: otaOledBinPath.value,
+                        app_version_code: otaAppVerCode.value,
+                        fw_version_code: otaFwVerCode.value
+                    })
+                });
+                const data = await resp.json();
+                if (resp.ok && data.success) {
+                    otaResult.value = { success: true, logs: data.logs };
+                    toast('🚀 Đã phát hành OTA thành công!', 'success');
+                    refreshStatus();
+                } else {
+                    otaResult.value = { success: false, error: data.error || 'Lỗi phát hành OTA' };
+                    toast(data.error || 'Lỗi phát hành OTA', 'error');
+                }
+            } catch (e) {
+                otaResult.value = { success: false, error: e.message };
+            } finally {
+                otaLoading.value = false;
+            }
+        }
+
         // ── Return ──
         return {
             navTab, goHome,
@@ -1160,6 +1295,8 @@ const app = createApp({
             initGitLoading, initResult, isGitRepo, gitConnectionClass,
             showReleasesPanel, newReleaseTag, newReleaseDesc, releases, releaseResult,
             fetchReleases, createRelease, deleteRelease, pushReleaseTag,
+            otaReleaseTag, otaAppVerCode, otaFwVerCode, otaApkPath, otaBinPath, otaOledBinPath, otaChangelog, otaLoading, otaDetecting, otaResult,
+            browseOtaFile, submitOtaRelease, autoDetectOtaAssets,
             graphData, graphRowHeight, graphSvgWidth, selectedCommit, contextMenu, commitNodeClass, formatDateVerbose, showContextMenu, openFileInExplorer, checkoutCommit, fetchGraph, renderGraphSegments,
             parseRefs, authorColor, authorInitial,
             sidebarWidth, treeWidth, isResizingSidebar, isResizingTree,
@@ -1171,6 +1308,7 @@ const app = createApp({
             cloneForm, createForm, cloning, creating, cloneProgress, createProgress,
             settings, formSettings, checking, tokenResults,
             giteaRepos, giteaRepoCount, giteaLoading, giteaError, giteaImporting, giteaImportProgress, giteaImport,
+            githubRepos, filteredGithubRepos, githubSearchQuery, githubLoading, githubError, githubImporting, fetchDashboardGithubRepos, cloneGithubRepo,
             selectProject, selectWorkingDir, filterProjects, statusClass, statusRowClass, isStaged, formatDate, copyText, analyzeGitError,
             refreshAll, refreshStatus, refreshLog, refreshBranches,
             stageFile, unstageFile, toggleStage, stageAll, unstageAll, viewDiff,

@@ -27,6 +27,7 @@
             <button class="nav-btn" :class="{ active: navTab === 'clone' }" @click="navTab='clone';selectedProject=null">📥 Clone</button>
             <button class="nav-btn" :class="{ active: navTab === 'create' }" @click="navTab='create';selectedProject=null">➕ Tạo repo</button>
             <button class="nav-btn" :class="{ active: navTab === 'gitea_browse' }" @click="navTab='gitea_browse';selectedProject=null;fetchDashboardGiteaRepos()">☕ Kho Gitea</button>
+            <button class="nav-btn" :class="{ active: navTab === 'github_browse' }" @click="navTab='github_browse';selectedProject=null;fetchDashboardGithubRepos()">🐙 Kho GitHub</button>
             <button class="nav-btn" :class="{ active: navTab === 'settings' }" @click="openSettings">⚙️ Cài đặt</button>
         </nav>
         <!-- Compact graph in sidebar -->
@@ -175,6 +176,44 @@
             </div>
         </div>
 
+        <!-- ═══════ GITHUB BROWSE ═══════ -->
+        <div v-if="navTab === 'github_browse' && !selectedProject" class="dashboard">
+            <div class="dashboard-header">
+                <h2>🐙 Kho GitHub</h2>
+                <div style="display:flex;gap:8px">
+                    <input type="text" class="form-input" v-model="githubSearchQuery" placeholder="🔍 Tìm repo GitHub..." style="width:220px">
+                    <button class="btn btn-secondary btn-sm" @click="fetchDashboardGithubRepos">🔄</button>
+                </div>
+            </div>
+            <div v-if="githubLoading" class="status-clean">⏳ Đang tải repository từ GitHub...</div>
+            <div v-else-if="githubError" class="status-clean" style="color:var(--red)">⚠️ [[ githubError ]]</div>
+            <div v-else-if="!settings.has_github_token" class="status-clean">
+                Chưa cấu hình GitHub token. Vui lòng vào <strong>⚙️ Cài đặt</strong> để nhập token.
+            </div>
+            <div v-else-if="filteredGithubRepos.length === 0" class="status-clean">Không tìm thấy repo GitHub nào.</div>
+            <div v-else class="repo-grid">
+                <div v-for="repo in filteredGithubRepos" :key="repo.id" class="repo-card repo-card-remote">
+                    <div class="repo-card-header">
+                        <span class="status-dot-lg" :class="repo.private ? 'staged' : 'clean'"></span>
+                        <span class="repo-card-name">📦 [[ repo.name ]]</span>
+                    </div>
+                    <div class="repo-card-path mono" style="font-size:11px;color:var(--text-muted)">[[ repo.full_name ]]</div>
+                    <div v-if="repo.description" style="font-size:12px;color:var(--text-secondary);margin:4px 0;max-height:36px;overflow:hidden;text-overflow:ellipsis">[[ repo.description ]]</div>
+                    <div class="repo-card-remotes">
+                        <span class="remote-tag github">GitHub</span>
+                        <span v-if="repo.private" class="repo-badge private">🔒 Private</span>
+                        <span v-else class="repo-badge public">🌐 Public</span>
+                    </div>
+                    <div class="repo-card-footer">
+                        <span class="repo-card-branch">🌿 [[ repo.default_branch ]]</span>
+                        <button class="btn btn-primary btn-sm" @click="cloneGithubRepo(repo)" :disabled="githubImporting === repo.id">
+                            [[ githubImporting === repo.id ? '⏳...' : '📥 Clone' ]]
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </div>
+
         <!-- ═══════ WORKSPACE (GitHub-like) ═══════ -->
         <div v-if="selectedProject" class="workspace">
             <!-- Breadcrumb + Branch selector -->
@@ -239,7 +278,7 @@
                 <button class="abtn" @click="showBranchPanel = !showBranchPanel">🌿 Quản lý nhánh</button>
                 <button class="abtn" @click="executeFetch" :disabled="syncing">📥 Lấy về</button>
                 <button class="abtn" @click="executeStashPush">📦 Cất giữ</button>
-                <button class="abtn" @click="showReleasesPanel = !showReleasesPanel">🏷️ Releases</button>
+                <button class="abtn" @click="showReleasesPanel = !showReleasesPanel; if (showReleasesPanel) { fetchReleases(); autoDetectOtaAssets(); }">🏷️ Releases & OTA</button>
                 <button class="abtn abtn-danger" @click="showResetPanel = !showResetPanel">⏪ Khôi phục</button>
                 <span class="abtn-info">📝 [[ stagedCount ]] đã stage</span>
             </div>
@@ -334,25 +373,61 @@
                     </div>
                 </div>
 
-                <!-- Create release -->
-                <div class="release-create" style="margin-bottom:12px">
-                    <div class="form-group">
-                        <label>Tên tag (vd: v1.0.0)</label>
-                        <input type="text" v-model="newReleaseTag" class="form-input" placeholder="v1.0.0">
+                <!-- OTA Release Form -->
+                <div class="release-create" style="margin-bottom:16px;padding:12px;background:var(--bg-secondary);border:1px solid var(--border-color);border-radius:var(--radius)">
+                    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">
+                        <h4 style="margin:0;color:var(--accent)">🚀 Phát hành Cập Nhật OTA (App APK & ESP32 Firmware)</h4>
+                        <button class="btn btn-secondary btn-sm" @click="autoDetectOtaAssets" :disabled="otaDetecting">
+                            [[ otaDetecting ? '🔍 Đang quét...' : '🔍 Tự Động Quét File Build' ]]
+                        </button>
+                    </div>
+                    <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;margin-bottom:8px">
+                        <div class="form-group">
+                            <label>Tên Tag (Release Tag)</label>
+                            <input type="text" v-model="otaReleaseTag" class="form-input" placeholder="v1.0.1">
+                        </div>
+                        <div class="form-group">
+                            <label>App Version Code</label>
+                            <input type="number" v-model="otaAppVerCode" class="form-input">
+                        </div>
+                        <div class="form-group">
+                            <label>Firmware Version Code</label>
+                            <input type="number" v-model="otaFwVerCode" class="form-input">
+                        </div>
                     </div>
                     <div class="form-group">
-                        <label>Mô tả release</label>
-                        <textarea v-model="newReleaseDesc" class="form-input" placeholder="Mô tả các thay đổi..." rows="3"></textarea>
+                        <label>Đường dẫn File Android App (.apk)</label>
+                        <div class="input-row">
+                            <input type="text" v-model="otaApkPath" class="form-input mono" placeholder="C:\...\TYMAP.apk">
+                            <button class="btn btn-secondary btn-sm" @click="browseOtaFile('apk')">📁 Duyệt file APK...</button>
+                        </div>
                     </div>
-                    <div style="display:flex;gap:8px;align-items:center">
-                        <button class="btn btn-primary btn-sm" @click="createRelease" :disabled="!newReleaseTag.trim()">🏷️ Tạo release</button>
-                        <button class="btn btn-xs" @click="newReleaseTag = ''; newReleaseDesc = ''">✖ Hủy</button>
+                    <div class="form-group">
+                        <label>Đường dẫn File Firmware ESP32 GC9A01 / Tròn (.bin)</label>
+                        <div class="input-row">
+                            <input type="text" v-model="otaBinPath" class="form-input mono" placeholder="C:\...\firmware.bin">
+                            <button class="btn btn-secondary btn-sm" @click="browseOtaFile('bin')">📁 Duyệt GC9A01...</button>
+                        </div>
                     </div>
-                    <div v-if="remotes.length > 0" style="margin-top:6px;font-size:11px;color:var(--text-muted)">
-                        ⬆️ Tag sẽ tự động được đẩy lên remote và tạo Release trên Gitea (nếu có).
+                    <div class="form-group">
+                        <label>Đường dẫn File Firmware ESP32 OLED (.bin)</label>
+                        <div class="input-row">
+                            <input type="text" v-model="otaOledBinPath" class="form-input mono" placeholder="C:\...\firmware.bin">
+                            <button class="btn btn-secondary btn-sm" @click="browseOtaFile('oled_bin')">📁 Duyệt OLED...</button>
+                        </div>
                     </div>
-                    <div v-else style="margin-top:6px;font-size:11px;color:var(--text-muted)">
-                        📡 Chưa có remote — tag chỉ tồn tại ở local. Thêm remote để đẩy lên Gitea/GitHub.
+                    <div class="form-group">
+                        <label>Nội dung cập nhật (Changelog)</label>
+                        <textarea v-model="otaChangelog" class="form-input" rows="2" placeholder="Ghi chú nâng cấp..."></textarea>
+                    </div>
+                    <button class="btn btn-primary btn-full" @click="submitOtaRelease" :disabled="otaLoading">
+                        [[ otaLoading ? '⏳ Đang upload & cập nhật OTA...' : '🚀 Tạo Release & Đẩy OTA sang Gitea + GitHub' ]]
+                    </button>
+                    <div v-if="otaResult" class="result-box" :class="otaResult.success ? 'success' : 'error'" style="margin-top:8px">
+                        <div v-if="otaResult.success">
+                            <div v-for="log in otaResult.logs" :key="log">[[ log ]]</div>
+                        </div>
+                        <div v-else>[[ otaResult.error ]]</div>
                     </div>
                 </div>
 
