@@ -447,3 +447,77 @@ def git_archive_zip(project_path: str, ref: str, output_path: str) -> dict:
     if r.returncode == 0:
         return {"success": True, "path": output_path}
     return {"success": False, "error": r.stderr.strip() or "Archive failed"}
+
+
+def git_diff_parsed(project_path: str, file_path: str = "", staged: bool = False, commit_hash: str = "") -> list[dict]:
+    """Return parsed diff with line numbers and change type (add/del/ctx/hunk/file)."""
+    import re
+    if commit_hash:
+        args = ["show", "--format=", commit_hash]
+        if file_path:
+            args.extend(["--", file_path])
+    else:
+        args = ["diff", "-U3"]
+        if staged:
+            args.append("--staged")
+        if file_path:
+            args.extend(["--", file_path])
+
+    r = _run_git(args, cwd=project_path)
+    if r.returncode != 0 or not r.stdout:
+        return []
+
+    lines = []
+    old_no = 0
+    new_no = 0
+    hunk_re = re.compile(r"^@@\s+-(\d+)(?:,\d+)?\s+\+(\d+)(?:,\d+)?\s+@@")
+
+    for raw_line in r.stdout.splitlines():
+        if raw_line.startswith("diff --git") or raw_line.startswith("index "):
+            lines.append({"type": "header", "old_lineno": None, "new_lineno": None, "text": raw_line})
+            continue
+        if raw_line.startswith("--- ") or raw_line.startswith("+++ "):
+            lines.append({"type": "file", "old_lineno": None, "new_lineno": None, "text": raw_line})
+            continue
+
+        m = hunk_re.match(raw_line)
+        if m:
+            old_no = int(m.group(1))
+            new_no = int(m.group(2))
+            lines.append({"type": "hunk", "old_lineno": None, "new_lineno": None, "text": raw_line})
+            continue
+
+        if raw_line.startswith("+"):
+            lines.append({"type": "add", "old_lineno": None, "new_lineno": new_no, "text": raw_line[1:]})
+            new_no += 1
+        elif raw_line.startswith("-"):
+            lines.append({"type": "del", "old_lineno": old_no, "new_lineno": None, "text": raw_line[1:]})
+            old_no += 1
+        else:
+            text = raw_line[1:] if raw_line.startswith(" ") else raw_line
+            lines.append({"type": "ctx", "old_lineno": old_no, "new_lineno": new_no, "text": text})
+            old_no += 1
+            new_no += 1
+
+    return lines
+
+
+def git_resolve_conflict(project_path: str, file_path: str, choice: str = "ours") -> dict:
+    """Resolve merge conflict on a file by checking out ours or theirs and staging it."""
+    if not file_path:
+        return {"success": False, "error": "Thiếu đường dẫn file"}
+    if choice in ("ours", "--ours"):
+        r = _run_git(["checkout", "--ours", "--", file_path], cwd=project_path)
+    elif choice in ("theirs", "--theirs"):
+        r = _run_git(["checkout", "--theirs", "--", file_path], cwd=project_path)
+    elif choice == "mark_resolved":
+        r = _run_git(["add", "--", file_path], cwd=project_path)
+        return {"success": r.returncode == 0, "error": r.stderr.strip() if r.returncode != 0 else ""}
+    else:
+        return {"success": False, "error": f"Lựa chọn không hợp lệ: {choice}"}
+
+    if r.returncode != 0:
+        return {"success": False, "error": r.stderr.strip() or "Checkout conflict file failed"}
+
+    r_add = _run_git(["add", "--", file_path], cwd=project_path)
+    return {"success": r_add.returncode == 0, "error": r_add.stderr.strip() if r_add.returncode != 0 else ""}

@@ -23,7 +23,7 @@ from gsm.git_utils import (
     git_log_detailed, git_diff, git_remote_list, git_remote_add, git_remote_remove,
     git_reset, git_tag_list, git_tag_create, git_tag_delete,
     git_init, git_custom_command, git_tree, git_read_file, git_log_graph,
-    git_archive_zip,
+    git_archive_zip, git_diff_parsed, git_resolve_conflict,
 )
 from gsm.api_utils import (
     check_github_token, check_gitea_token, check_gitea_password,
@@ -254,6 +254,8 @@ def api_git_command(project_id, cmd):
         "log":           lambda: jsonify(git_log_detailed(path, data.get("limit", 50), data.get("branch", ""))),
         "graph":         lambda: jsonify(git_log_graph(path, data.get("limit", 50), data.get("all", True))),
         "diff":          lambda: jsonify({"content": git_diff(path, data.get("file", ""), data.get("staged", False))}),
+        "diff_detail":   lambda: jsonify(git_diff_parsed(path, data.get("file", ""), data.get("staged", False), data.get("commit", ""))),
+        "resolve_conflict": lambda: _git_result(git_resolve_conflict(path, data.get("file", ""), data.get("choice", "ours"))),
         "remote_list":   lambda: jsonify(git_remote_list(path)),
         "remote_add":    lambda: _git_result(git_remote_add(path, data.get("name", ""), data.get("url", ""))),
         "remote_remove": lambda: _git_result(git_remote_remove(path, data.get("name", ""))),
@@ -271,6 +273,17 @@ def api_git_command(project_id, cmd):
     if not fn: return jsonify({"error": f"Unknown git command: {cmd}"}), 400
     try: return fn()
     except Exception as e: return jsonify({"error": str(e), "success": False}), 500
+
+
+@app.route("/api/projects/<project_id>/diff-detail", methods=["GET", "POST"])
+def api_project_diff_detail(project_id):
+    project, err = _require_project(project_id, require_git=True)
+    if err: return jsonify({"error": err}), 400
+    data = request.get_json(silent=True) or {}
+    file_path = request.args.get("file") or data.get("file", "")
+    commit = request.args.get("commit") or data.get("commit", "")
+    staged = request.args.get("staged", "false").lower() == "true" or data.get("staged", False)
+    return jsonify(git_diff_parsed(project["path"], file_path=file_path, staged=staged, commit_hash=commit))
 
 
 @app.route("/api/projects/<project_id>/archive-zip", methods=["GET"])

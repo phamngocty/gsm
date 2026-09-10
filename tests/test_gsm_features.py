@@ -88,5 +88,38 @@ class TestGitArchive(unittest.TestCase):
         self.assertIn("attachment", res.headers.get("Content-Disposition", ""))
 
 
+class TestDiffAndConflict(unittest.TestCase):
+
+    def test_git_diff_parsed(self):
+        from gsm.git_utils import git_diff_parsed
+        repo_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+        # Test with HEAD~1 vs HEAD
+        diff_lines = git_diff_parsed(repo_dir, commit_hash="HEAD")
+        self.assertIsInstance(diff_lines, list)
+        if diff_lines:
+            first = diff_lines[0]
+            self.assertIn("type", first)
+            self.assertIn("text", first)
+
+    def test_git_resolve_conflict_interface(self):
+        from gsm.git_utils import git_resolve_conflict
+        repo_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+        # Non-existent file should return a clean error without crashing
+        res = git_resolve_conflict(repo_dir, "non_existent_file.txt", "ours")
+        self.assertIn("success", res)
+
+    @patch("app.load_projects")
+    def test_api_diff_detail_endpoint(self, mock_load_projects):
+        import app
+        repo_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+        mock_load_projects.return_value = [{"id": "test_p1", "name": "gsm_test", "path": repo_dir}]
+
+        client = app.app.test_client()
+        res = client.get("/api/projects/test_p1/diff-detail?commit=HEAD")
+        self.assertEqual(res.status_code, 200)
+        data = res.get_json()
+        self.assertIsInstance(data, list)
+
+
 if __name__ == "__main__":
     unittest.main()
