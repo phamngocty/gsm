@@ -52,5 +52,41 @@ class TestGitHubReposAPI(unittest.TestCase):
         self.assertEqual(data["repos"][0]["name"], "repo1")
 
 
+class TestGitArchive(unittest.TestCase):
+
+    def test_git_archive_zip_success(self):
+        import tempfile
+        import zipfile
+        from gsm.git_utils import git_archive_zip
+
+        repo_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+        with tempfile.NamedTemporaryFile(suffix=".zip", delete=False) as tmp:
+            tmp_path = tmp.name
+
+        try:
+            result = git_archive_zip(repo_dir, "HEAD", tmp_path)
+            self.assertTrue(result["success"])
+            self.assertTrue(os.path.exists(tmp_path))
+            self.assertGreater(os.path.getsize(tmp_path), 0)
+            with zipfile.ZipFile(tmp_path, "r") as z:
+                names = z.namelist()
+                self.assertIn("app.py", names)
+        finally:
+            if os.path.exists(tmp_path):
+                os.remove(tmp_path)
+
+    @patch("app.load_projects")
+    def test_api_archive_zip_endpoint(self, mock_load_projects):
+        import app
+        repo_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+        mock_load_projects.return_value = [{"id": "test_p1", "name": "gsm_test", "path": repo_dir}]
+
+        client = app.app.test_client()
+        res = client.get("/api/projects/test_p1/archive-zip?ref=HEAD")
+        self.assertEqual(res.status_code, 200)
+        self.assertEqual(res.mimetype, "application/zip")
+        self.assertIn("attachment", res.headers.get("Content-Disposition", ""))
+
+
 if __name__ == "__main__":
     unittest.main()

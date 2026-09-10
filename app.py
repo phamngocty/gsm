@@ -9,7 +9,7 @@ import webbrowser
 from pathlib import Path
 from threading import Timer
 
-from flask import Flask, render_template, request, jsonify
+from flask import Flask, render_template, request, jsonify, send_file
 
 from gsm.config import DATA_DIR, APP_NAME, APP_VERSION, DEFAULT_PORT
 from gsm.storage import load_projects, save_projects, load_settings, save_settings, get_token, set_token
@@ -23,6 +23,7 @@ from gsm.git_utils import (
     git_log_detailed, git_diff, git_remote_list, git_remote_add, git_remote_remove,
     git_reset, git_tag_list, git_tag_create, git_tag_delete,
     git_init, git_custom_command, git_tree, git_read_file, git_log_graph,
+    git_archive_zip,
 )
 from gsm.api_utils import (
     check_github_token, check_gitea_token, check_gitea_password,
@@ -270,6 +271,33 @@ def api_git_command(project_id, cmd):
     if not fn: return jsonify({"error": f"Unknown git command: {cmd}"}), 400
     try: return fn()
     except Exception as e: return jsonify({"error": str(e), "success": False}), 500
+
+
+@app.route("/api/projects/<project_id>/archive-zip", methods=["GET"])
+@app.route("/api/git/archive-zip", methods=["GET"])
+def api_archive_zip(project_id=None):
+    pid = project_id or request.args.get("id") or request.args.get("project_id")
+    if not pid:
+        return jsonify({"error": "Thiếu project_id"}), 400
+    project, err = _require_project(pid, require_git=True)
+    if err:
+        return jsonify({"error": err}), 400
+    ref = request.args.get("ref", "HEAD").strip() or "HEAD"
+    import tempfile
+    tmp_file = tempfile.NamedTemporaryFile(suffix=".zip", delete=False)
+    tmp_path = tmp_file.name
+    tmp_file.close()
+
+    res = git_archive_zip(project["path"], ref, tmp_path)
+    if not res.get("success"):
+        if os.path.exists(tmp_path):
+            os.remove(tmp_path)
+        return jsonify({"error": res.get("error", "Lỗi tạo file zip")}), 500
+
+    safe_name = "".join(c if c.isalnum() or c in "-_" else "_" for c in project.get("name", "project"))
+    safe_ref = "".join(c if c.isalnum() or c in "-_." else "_" for c in ref)
+    download_filename = f"{safe_name}-{safe_ref}.zip"
+    return send_file(tmp_path, as_attachment=True, download_name=download_filename, mimetype="application/zip")
 
 
 # ═══════════════════════════════════════════════════════════════════════════

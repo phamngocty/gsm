@@ -438,3 +438,12 @@ def git_log_graph(project_path: str, limit: int = 50, all_branches: bool = True)
                 "raw": raw,
             })
     return result
+
+
+def git_archive_zip(project_path: str, ref: str, output_path: str) -> dict:
+    """Archive repository at a given ref (commit/branch/tag) into a .zip file."""
+    ref_target = ref if ref and ref.strip() else "HEAD"
+    r = _run_git(["archive", "--format=zip", f"--output={output_path}", ref_target], cwd=project_path)
+    if r.returncode == 0:
+        return {"success": True, "path": output_path}
+    return {"success": False, "error": r.stderr.strip() or "Archive failed"}
