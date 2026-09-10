@@ -27,8 +27,10 @@ from gsm.git_utils import (
 from gsm.api_utils import (
     check_github_token, check_gitea_token, check_gitea_password,
     create_github_repo, create_gitea_repo, create_gitea_release,
-    list_gitea_repos, list_gitea_repos_basic_auth,
+    list_gitea_repos, list_gitea_repos_basic_auth, list_github_repos,
+    upload_gitea_asset, create_github_release, upload_github_asset,
 )
+from gsm.ota_utils import find_release_assets, sync_version_to_nas
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 log = logging.getLogger("gsm")
@@ -506,6 +508,41 @@ def api_gitea_import_repo():
 
 
 # ═══════════════════════════════════════════════════════════════════════════
+#  API: GITHUB REPOS
+# ═══════════════════════════════════════════════════════════════════════════
+
+@app.route("/api/github/repos", methods=["GET"])
+def api_github_repos():
+    token = get_token("github_token")
+    if not token:
+        return jsonify({"error": "Chưa cấu hình GitHub token"}), 400
+    repos = list_github_repos(token)
+    return jsonify({"repos": repos})
+
+
+@app.route("/api/github/repos/import", methods=["POST"])
+def api_github_import_repo():
+    data = request.get_json(force=True)
+    clone_url = data.get("clone_url", "")
+    target_dir = data.get("target_dir", "")
+    if not clone_url or not target_dir:
+        return jsonify({"error": "Thiếu thông tin"}), 400
+    try:
+        lines = clone_repo(clone_url, target_dir)
+    except RuntimeError as e:
+        return jsonify({"error": str(e)}), 500
+    name = Path(target_dir).name
+    project = {
+        "id": _new_id(), "name": name, "path": target_dir,
+        "github_remote": clone_url, "gitea_remote": "", "created_at": _now_iso()
+    }
+    projects = load_projects()
+    projects.append(project)
+    save_projects(projects)
+    return jsonify({"project": project, "lines": lines}), 201
+
+
+# ═══════════════════════════════════════════════════════════════════════════
 #  API: DIALOGS
 # ═══════════════════════════════════════════════════════════════════════════
 
@@ -538,6 +575,327 @@ def _find_project(project_id: str) -> dict | None:
     for p in projects:
         if p["id"] == project_id: return p
     return None
+
+# ═══════════════════════════════════════════════════════════════════════════
+#  API: FILE BROWSER & OTA RELEASE MANAGEMENT
+# ═══════════════════════════════════════════════════════════════════════════
+
+@app.route("/api/browse-file", methods=["POST"])
+def api_browse_file():
+    """Trigger native Windows file dialog to browse for APK or BIN files."""
+    try:
+        import tkinter as tk
+        from tkinter import filedialog
+        data = request.get_json(force=True) or {}
+        file_type = data.get("type", "all")
+        
+        root = tk.Tk()
+        root.withdraw()
+        root.attributes("-topmost", True)
+        
+        if file_type == "apk":
+            filetypes = [("Android APK", "*.apk"), ("All Files", "*.*")]
+            title = "Chọn file ứng dụng Android (.apk)"
+        elif file_type == "bin":
+            filetypes = [("ESP32 GC9A01 Firmware BIN", "*.bin"), ("All Files", "*.*")]
+            title = "Chọn file Firmware ESP32 GC9A01 (.bin)"
+        elif file_type == "oled_bin":
+            filetypes = [("ESP32 OLED Firmware BIN", "*.bin"), ("All Files", "*.*")]
+            title = "Chọn file Firmware ESP32 OLED (.bin)"
+        else:
+            filetypes = [("All Files", "*.*")]
+            title = "Chọn file"
+            
+        file_path = filedialog.askopenfilename(title=title, filetypes=filetypes)
+        root.destroy()
+        return jsonify({"file_path": file_path or ""})
+    except Exception as e:
+        return jsonify({"error": f"Lỗi mở hộp thoại chọn file: {str(e)}", "file_path": ""}), 500
+
+
+@app.route("/api/projects/<project_id>/ota-detect", methods=["GET"])
+def api_ota_detect(project_id):
+    """Tự động quét thư mục dự án để tìm APK, BIN và thông tin version.json."""
+    projects = load_projects()
+    project = next((p for p in projects if p["id"] == project_id), None)
+    if not project:
+        return jsonify({"error": "Dự án không tồn tại"}), 404
+
+    local_path = project.get("path", "")
+    data = find_release_assets(local_path)
+    return jsonify(data)
+
+
+@app.route("/api/projects/<project_id>/ota-release", methods=["POST"])
+def api_create_ota_release(project_id):
+    """Release OTA assets (APK & BIN) and update version.json to Gitea/GitHub."""
+    projects = load_projects()
+    project = next((p for p in projects if p["id"] == project_id), None)
+    if not project:
+        return jsonify({"error": "Dự án không tồn tại"}), 404
+
+    data = request.get_json(force=True) or {}
+    tag_name = data.get("tag_name", "").strip()
+    release_name = data.get("release_name", tag_name).strip()
+    changelog = data.get("changelog", "").strip()
+    apk_path = data.get("apk_path", "").strip()
+    bin_path = data.get("bin_path", "").strip()
+    oled_bin_path = data.get("oled_bin_path", "").strip()
+    app_ver_code = data.get("app_version_code", 1)
+    fw_ver_code = data.get("fw_version_code", 1)
+
+    if not tag_name:
+        return jsonify({"error": "Thiếu Tag Name (ví dụ: v1.0.1)"}), 400
+
+    logs = []
+    local_path = project.get("path", "")
+    
+    # 1. Stage ALL changes, write version.json, commit ALL files & create tag
+    if local_path and is_git_repo(local_path):
+        try:
+            # Stage ALL modified/untracked files in repo
+            git_stage_all(local_path)
+            
+            # Write version.json locally
+            version_data = {
+                "app": {
+                    "versionCode": int(app_ver_code),
+                    "versionName": tag_name.lstrip("v"),
+                    "apkUrl": "",
+                    "changelog": changelog
+                },
+                "firmware": {
+                    "versionCode": int(fw_ver_code),
+                    "versionName": tag_name.lstrip("v"),
+                    "binUrl": "",
+                    "oledBinUrl": "",
+                    "changelog": changelog
+                },
+                "firmware_oled": {
+                    "versionCode": int(fw_ver_code),
+                    "versionName": tag_name.lstrip("v"),
+                    "binUrl": "",
+                    "changelog": changelog
+                }
+            }
+            v_path = os.path.join(local_path, "version.json")
+            with open(v_path, "w", encoding="utf-8") as f:
+                json.dump(version_data, f, ensure_ascii=False, indent=2)
+            
+            # Tự động Build lại APK Android mang chính xác mã phiên bản mới
+            tymap_path = os.path.join(local_path, "TYMAP")
+            if os.path.exists(tymap_path):
+                logs.append(f"🔨 Đang tự động biên dịch Android APK cho phiên bản {tag_name}...")
+                gradle_cmd = "gradlew.bat assembleDebug" if sys.platform == "win32" else "./gradlew assembleDebug"
+                try:
+                    res_gradle = subprocess.run(gradle_cmd, shell=True, cwd=tymap_path, capture_output=True, text=True)
+                    if res_gradle.returncode == 0:
+                        logs.append(f"✅ Đã build APK thành công với mã phiên bản {app_ver_code} ({tag_name})")
+                    else:
+                        logs.append(f"⚠️ Cảnh báo biên dịch APK: {res_gradle.stderr[:200] if res_gradle.stderr else res_gradle.stdout[:200]}")
+                except Exception as e_build:
+                    logs.append(f"⚠️ Không thể chạy build APK: {e_build}")
+
+            git_stage_file(local_path, "version.json")
+            git_stage_all(local_path)
+            
+            try:
+                git_commit(local_path, f"release({tag_name}): full update release including version.json")
+                logs.append(f"💾 Đã commit toàn bộ file dự án cho phiên bản {tag_name}")
+            except Exception:
+                pass # If nothing to commit
+
+            try:
+                git_tag_create(local_path, tag_name, f"Release {tag_name}")
+                logs.append(f"✅ Đã tạo Git Tag cục bộ: {tag_name}")
+            except Exception:
+                pass
+                
+            git_push(local_path)
+            git_push_tag(local_path, tag_name)
+            logs.append(f"🚀 Đã push TOÀN BỘ file & Tag {tag_name} lên các Remote Git (Gitea/GitHub)")
+        except Exception as e:
+            logs.append(f"⚠️ Cảnh báo Git commit/push: {str(e)}")
+
+    settings = load_settings()
+    gitea_token = get_token("gitea_token") or settings.get("gitea_token", "")
+    gitea_username = get_token("gitea_username") or settings.get("gitea_username", "") or "nas152"
+    gitea_password = get_token("gitea_password") or settings.get("gitea_password", "") or "271000"
+    gitea_server = settings.get("gitea_server", "").strip() or "http://192.168.1.114:3002"
+    github_token = get_token("github_token") or settings.get("github_token", "")
+
+    gitea_auth = gitea_token if gitea_token else (gitea_username, gitea_password)
+
+    if not github_token:
+        logs.append("💡 Gợi ý: Nếu muốn đẩy Release lên cả GitHub, bạn hãy điền GitHub Token trong Cài Đặt (⚙️ Settings -> GitHub Token)")
+    
+    gitea_apk_url = ""
+    gitea_bin_url = ""
+    gitea_oled_bin_url = ""
+    github_apk_url = ""
+    github_bin_url = ""
+    github_oled_bin_url = ""
+
+    # Parse owner/repo from remotes or setting
+    gitea_remote = project.get("gitea_remote", "")
+    github_remote = project.get("github_remote", "")
+    if local_path and is_git_repo(local_path):
+        try:
+            r_list = git_remote_list(local_path)
+            for r_name, r_url in r_list:
+                if not gitea_remote and ("gitea" in r_url.lower() or "3002" in r_url or "3000" in r_url or "nas152" in r_url.lower() or "vostore" in r_url.lower()):
+                    gitea_remote = r_url
+                if not github_remote and "github" in r_url.lower():
+                    github_remote = r_url
+                if not gitea_remote and not github_remote and r_name == "origin":
+                    if "github" in r_url.lower(): github_remote = r_url
+                    else: gitea_remote = r_url
+        except Exception: pass
+
+    def parse_owner_repo(url):
+        if not url: return "", ""
+        clean = url.rstrip("/").removesuffix(".git")
+        if ":" in clean and not clean.startswith("http://") and not clean.startswith("https://"):
+            clean = clean.split(":")[-1]
+        parts = clean.split("/")
+        if len(parts) >= 2:
+            return parts[-2], parts[-1]
+        return "", ""
+
+    # File availability warnings & auto-fallback
+    if apk_path and not os.path.exists(apk_path):
+        detected = find_release_assets(local_path)
+        if detected.get("apk_path") and os.path.exists(detected["apk_path"]):
+            logs.append(f"ℹ️ Tự động chuyển đường dẫn APK sang: {detected['apk_path']}")
+            apk_path = detected["apk_path"]
+        else:
+            logs.append(f"⚠️ Không tìm thấy file APK tại: {apk_path}")
+    if bin_path and not os.path.exists(bin_path):
+        logs.append(f"⚠️ Không tìm thấy file Firmware GC9A01 BIN tại: {bin_path}")
+    if oled_bin_path and not os.path.exists(oled_bin_path):
+        logs.append(f"⚠️ Không tìm thấy file Firmware OLED BIN tại: {oled_bin_path}")
+
+    # 2. Release on Gitea
+    if gitea_auth and gitea_server:
+        owner, repo = parse_owner_repo(gitea_remote)
+        if not owner or not repo:
+            owner, repo = "nas152", "Tdriver"
+        
+        rel = create_gitea_release(gitea_auth, gitea_server, owner, repo, tag_name, release_name, changelog)
+        if rel:
+            rel_id = rel.get("id")
+            logs.append(f"✅ Đã tạo Release trên Gitea NAS (ID {rel_id})")
+            if apk_path and os.path.exists(apk_path):
+                asset, err = upload_gitea_asset(gitea_auth, gitea_server, owner, repo, rel_id, apk_path, custom_name=os.path.basename(apk_path))
+                if asset:
+                    gitea_apk_url = asset.get("browser_download_url", "")
+                    logs.append(f"📦 Đã đính kèm Android APK lên Gitea Release: {gitea_apk_url}")
+                else:
+                    logs.append(f"❌ Lỗi upload APK lên Gitea Release: {err or 'Lỗi không xác định'}")
+            if bin_path and os.path.exists(bin_path):
+                asset, err = upload_gitea_asset(gitea_auth, gitea_server, owner, repo, rel_id, bin_path, custom_name="firmware.bin")
+                if asset:
+                    gitea_bin_url = asset.get("browser_download_url", "")
+                    logs.append(f"📦 Đã đính kèm Firmware GC9A01 BIN lên Gitea Release: {gitea_bin_url}")
+                else:
+                    logs.append(f"❌ Lỗi upload Firmware GC9A01 BIN lên Gitea Release: {err or 'Lỗi không xác định'}")
+            if oled_bin_path and os.path.exists(oled_bin_path):
+                # Upload OLED bin with custom name firmware_oled.bin to avoid overwriting GC9A01 firmware.bin
+                asset, err = upload_gitea_asset(gitea_auth, gitea_server, owner, repo, rel_id, oled_bin_path, custom_name="firmware_oled.bin")
+                if asset:
+                    gitea_oled_bin_url = asset.get("browser_download_url", "")
+                    logs.append(f"📦 Đã đính kèm Firmware OLED BIN lên Gitea Release: {gitea_oled_bin_url}")
+                else:
+                    logs.append(f"❌ Lỗi upload Firmware OLED BIN lên Gitea Release: {err or 'Lỗi không xác định'}")
+        else:
+            logs.append(f"⚠️ Không thể tạo/tìm Release trên Gitea cho repo {owner}/{repo}")
+
+    # 3. Release on GitHub
+    if github_token:
+        owner, repo = parse_owner_repo(github_remote)
+        if owner and repo:
+            rel = create_github_release(github_token, owner, repo, tag_name, release_name, changelog)
+            if rel:
+                rel_id = rel.get("id")
+                logs.append(f"✅ Release GitHub Sẵn Sàng (ID {rel_id})")
+                if apk_path and os.path.exists(apk_path):
+                    asset, err = upload_github_asset(github_token, owner, repo, rel_id, apk_path, custom_name=os.path.basename(apk_path))
+                    if asset:
+                        github_apk_url = asset.get("browser_download_url", "")
+                        logs.append(f"📦 Đã upload APK lên GitHub: {github_apk_url}")
+                    else:
+                        logs.append(f"❌ Lỗi upload APK lên GitHub Release: {err or 'Lỗi không xác định'}")
+                if bin_path and os.path.exists(bin_path):
+                    asset, err = upload_github_asset(github_token, owner, repo, rel_id, bin_path, custom_name="firmware.bin")
+                    if asset:
+                        github_bin_url = asset.get("browser_download_url", "")
+                        logs.append(f"📦 Đã upload Firmware GC9A01 BIN lên GitHub: {github_bin_url}")
+                    else:
+                        logs.append(f"❌ Lỗi upload Firmware GC9A01 BIN lên GitHub Release: {err or 'Lỗi không xác định'}")
+                if oled_bin_path and os.path.exists(oled_bin_path):
+                    asset, err = upload_github_asset(github_token, owner, repo, rel_id, oled_bin_path, custom_name="firmware_oled.bin")
+                    if asset:
+                        github_oled_bin_url = asset.get("browser_download_url", "")
+                        logs.append(f"📦 Đã upload Firmware OLED BIN lên GitHub: {github_oled_bin_url}")
+                    else:
+                        logs.append(f"❌ Lỗi upload Firmware OLED BIN lên GitHub Release: {err or 'Lỗi không xác định'}")
+            else:
+                logs.append(f"⚠️ Không thể tạo/tìm Release trên GitHub cho repo {owner}/{repo}")
+
+    # 4. Update final asset URLs inside version.json and push
+    # Ưu tiên URL NAS trực tiếp HTTPS (hoặc GitHub nếu có cấu hình)
+    nas_apk_url = "https://alert.nas152.duckdns.org/downloads/app-debug.apk"
+    nas_bin_url = "https://alert.nas152.duckdns.org/downloads/firmware.bin"
+    nas_oled_bin_url = "https://alert.nas152.duckdns.org/downloads/firmware_oled.bin"
+
+    final_apk_url = github_apk_url or nas_apk_url if (apk_path and os.path.exists(apk_path)) else (gitea_apk_url or "")
+    final_bin_url = github_bin_url or nas_bin_url if (bin_path and os.path.exists(bin_path)) else (gitea_bin_url or "")
+    final_oled_bin_url = github_oled_bin_url or nas_oled_bin_url if (oled_bin_path and os.path.exists(oled_bin_path)) else (gitea_oled_bin_url or final_bin_url)
+    
+    if local_path and os.path.exists(local_path):
+        version_data = {
+            "app": {
+                "versionCode": int(app_ver_code),
+                "versionName": tag_name.lstrip("v"),
+                "apkUrl": final_apk_url,
+                "changelog": changelog
+            },
+            "firmware": {
+                "versionCode": int(fw_ver_code),
+                "versionName": tag_name.lstrip("v"),
+                "binUrl": final_bin_url,
+                "oledBinUrl": final_oled_bin_url,
+                "changelog": changelog
+            },
+            "firmware_oled": {
+                "versionCode": int(fw_ver_code),
+                "versionName": tag_name.lstrip("v"),
+                "binUrl": final_oled_bin_url,
+                "changelog": changelog
+            }
+        }
+        v_path = os.path.join(local_path, "version.json")
+        with open(v_path, "w", encoding="utf-8") as f:
+            json.dump(version_data, f, ensure_ascii=False, indent=2)
+        logs.append(f"📄 Đã cập nhật URL chính thức vào version.json")
+        
+        try:
+            git_stage_file(local_path, "version.json")
+            git_commit(local_path, f"chore(ota): update release asset URLs in version.json for {tag_name}")
+            git_push(local_path)
+            logs.append("🚀 Đã push version.json hoàn chỉnh lên tất cả Remote Git")
+        except Exception:
+            pass
+
+        # Sync version.json và toàn bộ file APK/BIN trực tiếp sang NAS Fusion Engine
+        try:
+            if sync_version_to_nas(version_data, apk_path=apk_path, bin_path=bin_path, oled_bin_path=oled_bin_path):
+                logs.append("📡 Đã đồng bộ version.json & file nhị phân OTA sang máy chủ NAS (https://alert.nas152.duckdns.org)")
+        except Exception as e:
+            logs.append(f"⚠️ Cảnh báo đồng bộ NAS: {e}")
+
+    return jsonify({"success": True, "logs": logs, "apk_url": final_apk_url, "bin_url": final_bin_url, "oled_bin_url": final_oled_bin_url})
+
 
 def _cached_status(project: dict) -> dict:
     path = project.get("path", "")
