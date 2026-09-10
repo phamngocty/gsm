@@ -146,6 +146,45 @@ class TestOtaDecoupling(unittest.TestCase):
         self.assertTrue(data.get("success"))
         self.assertTrue(data.get("enable_ota"))
 
+    @patch("app.create_github_release")
+    @patch("app.get_token")
+    @patch("app.load_projects")
+    def test_api_github_release_endpoint(self, mock_load, mock_get_token, mock_create_release):
+        import app
+        mock_load.return_value = [{
+            "id": "p1",
+            "name": "proj1",
+            "github_remote": "https://github.com/octocat/my-project.git"
+        }]
+        mock_get_token.return_value = "ghp_fake123"
+        mock_create_release.return_value = {
+            "id": 99,
+            "tag_name": "v1.0.0",
+            "html_url": "https://github.com/octocat/my-project/releases/tag/v1.0.0"
+        }
+
+        client = app.app.test_client()
+        res = client.post("/api/projects/p1/github-release", json={
+            "tag_name": "v1.0.0",
+            "name": "Release v1.0.0",
+            "body": "Changelog details"
+        })
+        self.assertEqual(res.status_code, 200)
+        data = res.get_json()
+        self.assertTrue(data.get("success"))
+        self.assertEqual(data["release"]["tag_name"], "v1.0.0")
+
+    @patch("app.load_projects")
+    def test_api_archive_zip_alias(self, mock_load_projects):
+        import app
+        repo_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+        mock_load_projects.return_value = [{"id": "test_p1", "name": "gsm_test", "path": repo_dir}]
+
+        client = app.app.test_client()
+        res = client.get("/api/git/archive-zip?id=test_p1&ref=HEAD")
+        self.assertEqual(res.status_code, 200)
+        self.assertEqual(res.mimetype, "application/zip")
+
 
 if __name__ == "__main__":
     unittest.main()
