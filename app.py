@@ -12,7 +12,7 @@ from threading import Timer
 from flask import Flask, render_template, request, jsonify, send_file
 
 from gsm.config import DATA_DIR, APP_NAME, APP_VERSION, DEFAULT_PORT
-from gsm.storage import load_projects, save_projects, load_settings, save_settings, get_token, set_token
+from gsm.storage import load_projects, save_projects, load_settings, save_settings, get_token, set_token, update_project_ota
 from gsm.git_utils import (
     is_git_repo, get_status, get_recent_commits, clone_repo,
     open_in_fork, setup_multi_push,
@@ -160,6 +160,20 @@ def api_delete_project(project_id):
         p = project.get("path", "")
         if p and os.path.isdir(p): shutil.rmtree(p, ignore_errors=True)
     return jsonify({"message": "Đã xóa"})
+
+
+@app.route("/api/projects/<project_id>/toggle-ota", methods=["POST"])
+def api_project_toggle_ota(project_id):
+    data = request.get_json(silent=True) or {}
+    enable = data.get("enable_ota")
+    if enable is None:
+        p = _find_project(project_id)
+        if not p: return jsonify({"error": "Không tìm thấy"}), 404
+        enable = not p.get("enable_ota", False)
+    ok = update_project_ota(project_id, enable)
+    if not ok:
+        return jsonify({"error": "Không tìm thấy"}), 404
+    return jsonify({"success": True, "enable_ota": enable})
 
 
 @app.route("/api/projects/<project_id>/status", methods=["GET"])

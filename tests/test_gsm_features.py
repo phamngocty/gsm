@@ -121,5 +121,31 @@ class TestDiffAndConflict(unittest.TestCase):
         self.assertIsInstance(data, list)
 
 
+class TestOtaDecoupling(unittest.TestCase):
+
+    @patch("gsm.storage.save_projects")
+    @patch("gsm.storage.load_projects")
+    def test_update_project_ota(self, mock_load, mock_save):
+        from gsm.storage import update_project_ota
+        mock_load.return_value = [{"id": "p1", "name": "proj1", "enable_ota": False}]
+        
+        ok = update_project_ota("p1", True)
+        self.assertTrue(ok)
+        mock_save.assert_called_once()
+        saved_list = mock_save.call_args[0][0]
+        self.assertTrue(saved_list[0]["enable_ota"])
+
+    @patch("app.update_project_ota")
+    def test_toggle_ota_endpoint(self, mock_update_ota):
+        import app
+        mock_update_ota.return_value = True
+        client = app.app.test_client()
+        res = client.post("/api/projects/p1/toggle-ota", json={"enable_ota": True})
+        self.assertEqual(res.status_code, 200)
+        data = res.get_json()
+        self.assertTrue(data.get("success"))
+        self.assertTrue(data.get("enable_ota"))
+
+
 if __name__ == "__main__":
     unittest.main()

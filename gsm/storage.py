@@ -61,7 +61,11 @@ def load_projects() -> list:
         return []
     try:
         with open(PROJECTS_FILE, "r", encoding="utf-8") as f:
-            return json.load(f)
+            projects = json.load(f)
+            for p in projects:
+                if "enable_ota" not in p:
+                    p["enable_ota"] = False
+            return projects
     except (json.JSONDecodeError, OSError):
         return []
 
@@ -69,6 +73,20 @@ def load_projects() -> list:
 def save_projects(projects: list) -> None:
     with open(PROJECTS_FILE, "w", encoding="utf-8") as f:
         json.dump(projects, f, indent=2, ensure_ascii=False)
+
+
+def update_project_ota(project_id: str, enable_ota: bool) -> bool:
+    """Update enable_ota flag for a given project."""
+    projects = load_projects()
+    found = False
+    for p in projects:
+        if p.get("id") == project_id:
+            p["enable_ota"] = bool(enable_ota)
+            found = True
+            break
+    if found:
+        save_projects(projects)
+    return found
 
 
 def load_settings() -> dict:
