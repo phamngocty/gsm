@@ -328,6 +328,14 @@
             <!-- Commit Panel -->
             <div v-if="showCommitPanel" class="expand-panel">
                 <div class="expand-header"><h3>💾 Commit</h3><button class="btn btn-close" @click="showCommitPanel = false">✖</button></div>
+                <div style="display:flex;gap:4px;margin-bottom:6px;flex-wrap:wrap">
+                    <button class="btn btn-xs btn-secondary" @click="setCommitPreset('feat')">✨ feat</button>
+                    <button class="btn btn-xs btn-secondary" @click="setCommitPreset('fix')">🐛 fix</button>
+                    <button class="btn btn-xs btn-secondary" @click="setCommitPreset('update')">📝 update</button>
+                    <button class="btn btn-xs btn-secondary" @click="setCommitPreset('chore')">🔧 chore</button>
+                    <button class="btn btn-xs btn-secondary" @click="setCommitPreset('docs')">📚 docs</button>
+                    <button class="btn btn-xs btn-secondary" @click="setCommitPreset('refactor')">🔨 refactor</button>
+                </div>
                 <textarea v-model="commitMessage" class="form-input commit-message-input" placeholder="Thông điệp commit..." rows="2"></textarea>
                 <textarea v-model="commitDescription" class="form-input" placeholder="Mô tả (optional)..." rows="2" style="margin-top:6px"></textarea>
                 <div class="commit-actions" style="margin-top:8px">
@@ -657,6 +665,8 @@
                                         </div>
                                     </div>
                                     <div class="graph-actions" v-if="row.hash" @click.stop>
+                                        <a class="btn btn-xs btn-secondary" :href="'/api/git/archive-zip?id=' + selectedProject.id + '&ref=' + (row.full_hash || row.hash)" target="_blank" title="Tải mã nguồn commit này (.ZIP)">📥</a>
+                                        <button class="btn btn-xs btn-secondary" @click.stop="promptCreateBranchFromCommit(row.full_hash || row.hash)" title="Tạo nhánh mới từ commit này">🌿</button>
                                         <button class="btn btn-xs" @click.stop="checkoutCommit(row.hash)" title="Checkout commit này">🔀</button>
                                         <button class="btn btn-xs" @click.stop="resetToCommit(row.hash, 'soft')" title="Reset soft (giữ nguyên thay đổi)">🔽</button>
                                         <button class="btn btn-xs" @click.stop="resetToCommit(row.hash, 'mixed')" title="Reset mixed (bỏ stage)">⏹</button>
@@ -665,6 +675,54 @@
                                 </div>
                             </div>
                             <div v-else class="status-clean">Chưa có commit nào</div>
+
+                            <!-- Commit Inspector Card -->
+                            <div v-if="selectedCommit" class="commit-inspector-card" style="margin-top:12px; border:1px solid var(--border); border-radius:var(--radius); padding:12px; background:var(--bg-surface);">
+                                <div style="display:flex; justify-content:space-between; align-items:flex-start; margin-bottom:8px; gap:8px;">
+                                    <div>
+                                        <div style="display:flex; align-items:center; gap:8px; flex-wrap:wrap;">
+                                            <span class="mono" style="font-weight:700; color:var(--accent);">[[ selectedCommit.hash ]]</span>
+                                            <span style="font-weight:600; font-size:13px;">[[ selectedCommit.message ]]</span>
+                                        </div>
+                                        <div style="font-size:11px; color:var(--text-muted); margin-top:4px;">
+                                            👤 [[ selectedCommit.author ]] &bull; 🕐 [[ formatDateVerbose(selectedCommit.date) ]]
+                                        </div>
+                                    </div>
+                                    <div style="display:flex; gap:6px; flex-shrink:0;">
+                                        <a class="btn btn-xs btn-primary" :href="'/api/git/archive-zip?id=' + selectedProject.id + '&ref=' + (selectedCommit.full_hash || selectedCommit.hash)" target="_blank">📥 Tải ZIP</a>
+                                        <button class="btn btn-xs btn-secondary" @click="promptCreateBranchFromCommit(selectedCommit.full_hash || selectedCommit.hash)">🌿 Tạo nhánh</button>
+                                        <button class="btn btn-xs" @click="checkoutCommit(selectedCommit.hash)">🔀 Checkout</button>
+                                        <button class="btn btn-xs btn-close" @click="selectedCommit = null">✖</button>
+                                    </div>
+                                </div>
+                                <div v-if="selectedCommitDiff && selectedCommitDiff.length > 0" style="margin-top:10px;">
+                                    <div style="font-size:12px; font-weight:600; margin-bottom:6px; color:var(--text-secondary);">
+                                        📁 Thay đổi trong commit ([[ selectedCommitDiff.length ]] files):
+                                    </div>
+                                    <div v-for="df in selectedCommitDiff" :key="df.file" class="diff-file-card" style="margin-bottom:8px; border:1px solid var(--border); border-radius:4px; overflow:hidden;">
+                                        <div style="background:var(--bg-hover); padding:5px 10px; font-size:12px; font-family:var(--mono); display:flex; justify-content:space-between; align-items:center;">
+                                            <span>📄 [[ df.file ]]</span>
+                                            <span v-if="df.is_new" style="color:var(--green); font-size:11px;">[Mới]</span>
+                                            <span v-else-if="df.is_deleted" style="color:var(--red); font-size:11px;">[Đã xóa]</span>
+                                        </div>
+                                        <div style="max-height:180px; overflow-y:auto; font-family:var(--mono); font-size:11px; background:var(--bg-primary); padding:4px 0;">
+                                            <div v-for="(h, hi) in df.hunks" :key="hi">
+                                                <div style="color:var(--text-muted); background:rgba(255,255,255,0.03); padding:2px 8px;">[[ h.header ]]</div>
+                                                <div v-for="(line, li) in h.lines" :key="li"
+                                                     :class="{'diff-line-add': line.type === 'add', 'diff-line-del': line.type === 'del'}"
+                                                     style="display:flex; padding:1px 8px; line-height:1.4;">
+                                                    <span style="width:32px; color:var(--text-muted); user-select:none; flex-shrink:0;">[[ line.old_lineno || '' ]]</span>
+                                                    <span style="width:32px; color:var(--text-muted); user-select:none; flex-shrink:0;">[[ line.new_lineno || '' ]]</span>
+                                                    <span style="white-space:pre-wrap; word-break:break-all;">[[ line.text ]]</span>
+                                                </div>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+                                <div v-else style="font-size:11px; color:var(--text-muted); font-style:italic; margin-top:6px;">
+                                    Đang tải thay đổi của commit hoặc commit không có thay đổi...
+                                </div>
+                            </div>
                         </div>
 
                         <!-- Changes -->

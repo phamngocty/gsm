@@ -386,7 +386,11 @@ body.resizing-sidebar .drag-handle-v { background: var(--accent); opacity: 0.5; 
 .graph-author { color: var(--text-secondary); display: flex; align-items: center; gap: 4px; }
 .graph-author-avatar { display: inline-flex; align-items: center; justify-content: center; width: 18px; height: 18px; border-radius: 50%; font-size: 9px; font-weight: 600; color: #fff; flex-shrink: 0; }
 .graph-date { color: var(--text-muted); }
-.graph-actions { display: flex; gap: 4px; flex-shrink: 0; align-items: center; padding: 4px 8px; width: 120px; }
+.graph-actions { display: flex; gap: 4px; flex-shrink: 0; align-items: center; padding: 4px 8px; min-width: 170px; }
+
+/* ─── Diff Lines & Inspector ─── */
+.diff-line-add { background: rgba(46, 160, 67, 0.15) !important; color: #3fb950 !important; }
+.diff-line-del { background: rgba(218, 54, 51, 0.15) !important; color: #f85149 !important; }
 
 /* ─── Context Menu ─── */
 .context-menu { position: fixed; z-index: 9999; background: var(--bg-surface); border: 1px solid var(--border); border-radius: var(--radius); box-shadow: var(--shadow); padding: 4px 0; min-width: 160px; }

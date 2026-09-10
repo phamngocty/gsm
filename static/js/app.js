@@ -520,6 +520,53 @@ const app = createApp({
             } catch (e) { toast(e.message, 'error'); }
         }
 
+        async function promptCreateBranchFromCommit(commitHash) {
+            const shortHash = (commitHash || '').substring(0, 8);
+            const name = prompt(`Nhập tên nhánh mới từ commit ${shortHash}:`, `branch-${shortHash}`);
+            if (!name || !name.trim()) return;
+            try {
+                const d = await gitCmd(selectedProject.value.id, 'branch_create', { name: name.trim(), from: commitHash });
+                if (d.success) {
+                    toast(`✅ Đã tạo nhánh "${name.trim()}" từ commit ${shortHash}!`, 'success');
+                    await refreshBranches();
+                } else {
+                    toast(d.error || 'Lỗi tạo nhánh', 'error');
+                }
+            } catch (e) {
+                toast(e.message, 'error');
+            }
+        }
+
+        function setCommitPreset(prefix) {
+            const map = {
+                feat: 'feat: ',
+                fix: 'fix: ',
+                update: 'update: ',
+                chore: 'chore: ',
+                docs: 'docs: ',
+                refactor: 'refactor: '
+            };
+            const p = map[prefix] || `${prefix}: `;
+            const current = (commitMessage.value || '').trim();
+            if (!current.startsWith(p)) {
+                commitMessage.value = p + current.replace(/^(feat|fix|update|chore|docs|refactor):\s*/i, '');
+            }
+        }
+
+        const selectedCommitDiff = ref([]);
+        watch(selectedCommit, async (c) => {
+            if (c && c.hash && selectedProject.value) {
+                try {
+                    const data = await api(`/api/projects/${selectedProject.value.id}/diff-detail?commit=${c.full_hash || c.hash}`);
+                    selectedCommitDiff.value = data || [];
+                } catch (e) {
+                    selectedCommitDiff.value = [];
+                }
+            } else {
+                selectedCommitDiff.value = [];
+            }
+        });
+
         // ── Reset / Restore ──
         async function resetToCommit(hash, mode) {
             resetTarget.value = hash;
@@ -1339,8 +1386,8 @@ const app = createApp({
             fetchReleases, createRelease, deleteRelease, pushReleaseTag,
             otaReleaseTag, otaAppVerCode, otaFwVerCode, otaApkPath, otaBinPath, otaOledBinPath, otaChangelog, otaLoading, otaDetecting, otaResult,
             browseOtaFile, submitOtaRelease, autoDetectOtaAssets,
-            graphData, graphRowHeight, graphSvgWidth, selectedCommit, contextMenu, commitNodeClass, formatDateVerbose, showContextMenu, openFileInExplorer, checkoutCommit, fetchGraph, renderGraphSegments,
-            parseRefs, authorColor, authorInitial,
+            graphData, graphRowHeight, graphSvgWidth, selectedCommit, selectedCommitDiff, contextMenu, commitNodeClass, formatDateVerbose, showContextMenu, openFileInExplorer, checkoutCommit, promptCreateBranchFromCommit, fetchGraph, renderGraphSegments,
+            setCommitPreset, parseRefs, authorColor, authorInitial,
             sidebarWidth, treeWidth, isResizingSidebar, isResizingTree,
             startResizeSidebar, startResizeTree,
             showResetPanel, resetTarget, showResetConfirm, resetResult,
