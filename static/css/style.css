@@ -438,3 +438,15 @@ body.resizing-sidebar .drag-handle-v { background: var(--accent); opacity: 0.5; 
 .reset-option-info span { font-size: 12px; color: var(--text-muted); }
 .abtn-danger { border-color: rgba(248,113,113,0.3) !important; color: var(--red) !important; }
 .abtn-danger:hover { background: rgba(248,113,113,0.1) !important; }
+
+/* ─── Buttons & Conflict Resolution ─── */
+.btn-warning { background: rgba(245, 158, 11, 0.2); color: #f59e0b; border: 1px solid rgba(245, 158, 11, 0.4); }
+.btn-warning:hover { background: rgba(245, 158, 11, 0.35); }
+.btn-success { background: rgba(34, 197, 94, 0.2); color: #22c55e; border: 1px solid rgba(34, 197, 94, 0.4); }
+.btn-success:hover { background: rgba(34, 197, 94, 0.35); }
+
+.tree-item-dir { cursor: pointer; user-select: none; }
+.tree-item-dir:hover { background: var(--bg-hover); color: var(--accent); }
+.conflict-alert-banner { animation: pulse 2s infinite ease-in-out; }
+@keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.85; } }
+

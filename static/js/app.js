@@ -744,9 +744,41 @@ const app = createApp({
             return classes[ext] || (name.startsWith('.') ? 'hidden' : 'generic');
         }
 
+        // ── Collapsible File Tree & Search ──
+        const treeSearchQuery = ref('');
+        const collapsedDirs = ref(new Set());
+
+        function toggleDirCollapse(dirPath) {
+            const s = new Set(collapsedDirs.value);
+            if (s.has(dirPath)) s.delete(dirPath);
+            else s.add(dirPath);
+            collapsedDirs.value = s;
+        }
+
+        function isDirCollapsed(dirPath) {
+            return collapsedDirs.value.has(dirPath);
+        }
+
+        const visibleFileTree = computed(() => {
+            if (!fileTree.value || !fileTree.value.length) return [];
+            let items = fileTree.value;
+            if (treeSearchQuery.value.trim()) {
+                const q = treeSearchQuery.value.toLowerCase().trim();
+                return items.filter(item => item.path.toLowerCase().includes(q));
+            }
+            return items.filter(item => {
+                const parts = item.path.split('/');
+                for (let i = 1; i < parts.length; i++) {
+                    const parent = parts.slice(0, i).join('/');
+                    if (collapsedDirs.value.has(parent)) return false;
+                }
+                return true;
+            });
+        });
+
         function onTreeItemClick(item) {
             if (item.type === 'dir') {
-                // Toggle directory expansion by clicking again? For now just show content if possible
+                toggleDirCollapse(item.path);
                 return;
             }
             viewFileContent(item);
@@ -891,7 +923,62 @@ const app = createApp({
             if (!selectedProject.value) return;
             try { const s = await api(`/api/projects/${selectedProject.value.id}/status`); projectStatus.value = s; updateProjectStatus(selectedProject.value.id, s); } catch (e) { projectStatus.value = { branch: '?', files: [], ahead: 0, behind: 0, has_conflict: false }; }
         }
-        async function viewDiff(fp) { diffFile.value = fp; try { const d = await gitCmd(selectedProject.value.id, 'diff', { file: fp }); diffContent.value = d.content || '(empty)'; } catch (e) { diffContent.value = 'Error: ' + e.message; } }
+        const parsedDiff = ref([]);
+        async function viewDiff(fp) {
+            diffFile.value = fp;
+            diffContent.value = '';
+            parsedDiff.value = [];
+            viewingFile.value = '';
+            try {
+                const data = await api(`/api/projects/${selectedProject.value.id}/diff-detail?file=${encodeURIComponent(fp)}`);
+                parsedDiff.value = data || [];
+                if (!parsedDiff.value.length) {
+                    const d = await gitCmd(selectedProject.value.id, 'diff', { file: fp });
+                    diffContent.value = d.content || '(empty)';
+                }
+            } catch (e) {
+                try {
+                    const d = await gitCmd(selectedProject.value.id, 'diff', { file: fp });
+                    diffContent.value = d.content || '(empty)';
+                } catch (err) {
+                    diffContent.value = 'Error: ' + err.message;
+                }
+            }
+        }
+
+        // ── Conflict Resolution ──
+        const activeConflictFile = ref('');
+        const conflictFileContent = ref('');
+        const conflictLoading = ref(false);
+
+        async function openConflictResolver(filePath) {
+            activeConflictFile.value = filePath;
+            conflictLoading.value = true;
+            conflictFileContent.value = '';
+            try {
+                const data = await gitCmd(selectedProject.value.id, 'read_file', { file: filePath });
+                conflictFileContent.value = data.content || '';
+            } catch (e) {
+                conflictFileContent.value = 'Lỗi đọc file: ' + e.message;
+            } finally {
+                conflictLoading.value = false;
+            }
+        }
+
+        async function resolveConflict(filePath, choice) {
+            try {
+                const d = await gitCmd(selectedProject.value.id, 'resolve_conflict', { file: filePath, choice });
+                if (d.success) {
+                    toast(`✅ Đã giải quyết xung đột cho ${filePath} (${choice})!`, 'success');
+                    activeConflictFile.value = '';
+                    await refreshStatus();
+                } else {
+                    toast(d.error || 'Lỗi giải quyết xung đột', 'error');
+                }
+            } catch (e) {
+                toast(e.message, 'error');
+            }
+        }
 
         // ── Commit ──
         async function executeCommit() {
@@ -1374,6 +1461,7 @@ const app = createApp({
             projectStatus, commitLog, branches, remotes, remoteMap,
             syncResult, syncing,
             fileTree, fileTreeLoading, viewingFile, fileContent, fileContentLoading, isReadmeFile, viewFileContent,
+            treeSearchQuery, visibleFileTree, isDirCollapsed, toggleDirCollapse,
             fileIcon, fileIconClass, onTreeItemClick,
             dragOverPath, onTreeDragStart, onTreeDragOver, onTreeDragLeave, onTreeDrop,
             showCommitPanel, showBranchPanel,
@@ -1392,7 +1480,8 @@ const app = createApp({
             startResizeSidebar, startResizeTree,
             showResetPanel, resetTarget, showResetConfirm, resetResult,
             resetToCommit, executeReset, confirmHardReset, confirmRevert,
-            diffContent, diffFile,
+            diffContent, diffFile, parsedDiff,
+            activeConflictFile, conflictFileContent, conflictLoading, openConflictResolver, resolveConflict,
             showAddModal, showSettingsModal, addTab,
             cloneForm, createForm, cloning, creating, cloneProgress, createProgress,
             settings, formSettings, checking, tokenResults,

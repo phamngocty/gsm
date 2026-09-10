@@ -570,16 +570,19 @@
             <div v-if="isGitRepo" class="repo-content">
                 <!-- File tree sidebar -->
                 <div class="file-tree-panel" :style="{ width: treeWidth + 'px' }">
-                    <div class="file-tree-header">
-                        <span>📂 Thư mục</span>
-                        <span class="file-tree-count" v-if="fileTree.length">[[ fileTree.length ]] files</span>
+                    <div class="file-tree-header" style="flex-direction:column; align-items:stretch; gap:6px;">
+                        <div style="display:flex; justify-content:space-between; align-items:center;">
+                            <span>📂 Thư mục</span>
+                            <span class="file-tree-count" v-if="fileTree.length">[[ visibleFileTree.length ]]/[[ fileTree.length ]]</span>
+                        </div>
+                        <input type="text" v-model="treeSearchQuery" class="form-input form-input-xs" placeholder="🔍 Tìm nhanh file (tên, đuôi)..." style="font-size:11px; padding:3px 6px; width:100%; box-sizing:border-box;">
                     </div>
                     <div v-if="fileTreeLoading" class="file-tree-loading">⏳</div>
                     <div v-else class="file-tree-list">
-                        <div v-for="(item, idx) in fileTree" :key="item.path"
+                        <div v-for="(item, idx) in visibleFileTree" :key="item.path"
                              class="tree-item"
                              :class="{ 'tree-item-dir': item.type === 'dir', 'tree-item-file': item.type !== 'dir', 'tree-item-active': viewingFile === item.path, 'tree-item-dragover': dragOverPath === item.path }"
-                             :style="{ paddingLeft: (item.path.split('/').length - 1) * 20 + 8 + 'px' }"
+                             :style="{ paddingLeft: (item.path.split('/').length - 1) * 16 + 8 + 'px' }"
                              @click="onTreeItemClick(item)"
                              draggable="true"
                              @dragstart="onTreeDragStart($event, item)"
@@ -587,16 +590,18 @@
                              @dragleave="onTreeDragLeave($event)"
                              @drop.prevent="onTreeDrop($event, item)"
                              :title="item.path">
-                            <!-- Connector lines -->
-                            <span class="tree-connector" v-if="idx < fileTree.length - 1">├──</span>
-                            <span class="tree-connector tree-connector-last" v-else>└──</span>
-                            <!-- Icon with file-type color -->
-                            <span v-if="item.type === 'dir'" class="tree-icon tree-icon-dir">📁</span>
-                            <span v-else class="tree-icon" :class="'tree-icon-' + fileIconClass(item.name)">[[ fileIcon(item.name) ]]</span>
-                            <!-- Name -->
-                            <span class="tree-item-name">[[ item.name ]]</span>
+                            <!-- Folder icon with collapse indicator -->
+                            <template v-if="item.type === 'dir'">
+                                <span class="tree-icon tree-icon-dir" style="font-size:11px;">[[ isDirCollapsed(item.path) ? '📁▶' : '📂▼' ]]</span>
+                                <span class="tree-item-name" style="font-weight:600;">[[ item.name ]]</span>
+                            </template>
+                            <!-- File icon with type styling -->
+                            <template v-else>
+                                <span class="tree-icon" :class="'tree-icon-' + fileIconClass(item.name)">[[ fileIcon(item.name) ]]</span>
+                                <span class="tree-item-name">[[ item.name ]]</span>
+                            </template>
                         </div>
-                        <div v-if="fileTree.length === 0" class="file-tree-empty">(empty repo)</div>
+                        <div v-if="visibleFileTree.length === 0" class="file-tree-empty">[[ treeSearchQuery ? 'Không tìm thấy file nào' : '(empty repo)' ]]</div>
                     </div>
                 </div>
                 <!-- Tree resize handle -->
@@ -727,19 +732,29 @@
 
                         <!-- Changes -->
                         <div class="section-header" style="margin-top:12px"><h3>📊 Thay đổi</h3><button class="btn btn-secondary btn-sm" @click="refreshStatus">🔄</button></div>
+                        <div v-if="projectStatus.has_conflict" class="conflict-alert-banner" style="background:rgba(248,113,113,0.12); border:1px solid var(--red); border-radius:var(--radius); padding:8px 12px; margin-bottom:8px; display:flex; align-items:center; justify-content:space-between;">
+                            <div style="display:flex; align-items:center; gap:8px;">
+                                <span style="font-size:18px;">⚠️</span>
+                                <div>
+                                    <strong style="color:var(--red); font-size:13px;">Phát hiện xung đột (Merge Conflict)!</strong>
+                                    <div style="font-size:11px; color:var(--text-secondary);">Nhấn nút "⚡ Xử lý" tại file bị xung đột để chọn giữ code local hay server.</div>
+                                </div>
+                            </div>
+                        </div>
                         <div v-if="projectStatus.files && projectStatus.files.length > 0">
                             <div style="display:flex;gap:6px;margin-bottom:6px">
                                 <button class="btn btn-xs btn-primary" @click="stageAll">＋ Stage tất cả</button>
                                 <button class="btn btn-xs" @click="unstageAll">－ Bỏ stage</button>
                                 <button class="btn btn-xs" @click="refreshStatus">🔄</button>
                             </div>
-                            <table class="file-table"><thead><tr><th width="30"></th><th>File</th><th>Trạng thái</th><th width="80"></th></tr></thead>
+                            <table class="file-table"><thead><tr><th width="30"></th><th>File</th><th>Trạng thái</th><th width="100"></th></tr></thead>
                                 <tbody><tr v-for="file in projectStatus.files" :key="file.path" :class="statusRowClass(file.status)"
                                     @click.right.prevent="showContextMenu($event, file)">
                                     <td><input type="checkbox" :checked="isStaged(file.status)" @change="toggleStage(file)"></td>
                                     <td class="file-path">[[ file.path ]]</td>
                                     <td><span class="status-badge" :class="'badge-' + file.status.toLowerCase()">[[ file.status ]]</span></td>
                                     <td>
+                                        <button v-if="file.status === 'Conflict'" class="btn btn-xs btn-danger" @click="openConflictResolver(file.path)" title="Xử lý xung đột" style="margin-right:2px;">⚡ Xử lý</button>
                                         <button class="btn btn-xs" @click="viewDiff(file.path)" title="Xem diff">📄</button>
                                         <button class="btn btn-xs" @click="openFileInExplorer(file.path)" title="Mở file">📂</button>
                                         <button class="btn btn-xs" @click="blameFile(file.path)" title="Blame file">🔍</button>
@@ -748,6 +763,36 @@
                             </table>
                         </div>
                         <div v-else class="status-clean">✅ Không có file thay đổi</div>
+                    </div>
+
+                    <!-- Conflict Resolver Modal / Card -->
+                    <div v-if="activeConflictFile" class="conflict-resolver-card" style="margin-top:12px; border:2px solid var(--red); border-radius:var(--radius); padding:12px; background:var(--bg-surface);">
+                        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;">
+                            <div style="display:flex; align-items:center; gap:8px;">
+                                <span style="font-size:16px;">⚡</span>
+                                <strong>Giải quyết xung đột: <span class="mono" style="color:var(--accent);">[[ activeConflictFile ]]</span></strong>
+                            </div>
+                            <button class="btn btn-close" @click="activeConflictFile = ''">✖</button>
+                        </div>
+                        <div style="font-size:12px; color:var(--text-secondary); margin-bottom:10px;">
+                            Chọn hành động giải quyết cho file này (hệ thống sẽ tự động checkout phiên bản mong muốn và git add):
+                        </div>
+                        <div style="display:flex; gap:8px; margin-bottom:12px; flex-wrap:wrap;">
+                            <button class="btn btn-sm btn-primary" @click="resolveConflict(activeConflictFile, 'ours')" title="Giữ nguyên phiên bản code của bạn (--ours)">
+                                👈 Giữ code của tôi (Ours)
+                            </button>
+                            <button class="btn btn-sm btn-warning" @click="resolveConflict(activeConflictFile, 'theirs')" title="Lấy phiên bản code từ server/nhánh merge (--theirs)">
+                                👉 Lấy code server (Theirs)
+                            </button>
+                            <button class="btn btn-sm btn-success" @click="resolveConflict(activeConflictFile, 'mark_resolved')" title="Đã chỉnh sửa thủ công xong, đánh dấu resolved (git add)">
+                                ✅ Đã sửa xong (Mark Resolved)
+                            </button>
+                            <button class="btn btn-sm btn-secondary" @click="openFileInExplorer(activeConflictFile)" title="Mở file trong trình soạn thảo bên ngoài">
+                                📂 Mở file sửa tay
+                            </button>
+                        </div>
+                        <div v-if="conflictLoading" class="status-clean">⏳ Đang đọc nội dung file...</div>
+                        <div v-else style="max-height:260px; overflow-y:auto; border:1px solid var(--border); border-radius:4px; background:var(--bg-primary); padding:8px; font-family:var(--mono); font-size:12px; white-space:pre-wrap;">[[ conflictFileContent ]]</div>
                     </div>
 
                     <!-- File content viewer -->
@@ -763,9 +808,26 @@
                     </div>
 
                     <!-- Diff -->
-                    <div v-if="diffContent && !viewingFile" class="diff-viewer">
-                        <div class="diff-header"><h4>📄 So sánh: [[ diffFile ]]</h4><button class="btn btn-close" @click="diffContent = ''">✖</button></div>
-                        <pre class="diff-content">[[ diffContent ]]</pre>
+                    <div v-if="(diffContent || (parsedDiff && parsedDiff.length > 0)) && !viewingFile" class="diff-viewer" style="margin-top:12px; border:1px solid var(--border); border-radius:var(--radius); overflow:hidden;">
+                        <div class="diff-header" style="display:flex; justify-content:space-between; align-items:center; padding:8px 12px; background:var(--bg-surface); border-bottom:1px solid var(--border);">
+                            <h4 style="margin:0; font-size:13px; font-family:var(--mono);">📄 So sánh thay đổi: [[ diffFile ]]</h4>
+                            <button class="btn btn-close" @click="diffContent = ''; parsedDiff = []">✖</button>
+                        </div>
+                        <div v-if="parsedDiff && parsedDiff.length > 0" style="max-height:350px; overflow-y:auto; background:var(--bg-primary); font-family:var(--mono); font-size:12px;">
+                            <div v-for="df in parsedDiff" :key="df.file">
+                                <div v-for="(h, hi) in df.hunks" :key="hi">
+                                    <div style="color:var(--text-muted); background:rgba(255,255,255,0.03); padding:3px 12px; font-size:11px; border-top:1px solid rgba(255,255,255,0.05); border-bottom:1px solid rgba(255,255,255,0.05);">[[ h.header ]]</div>
+                                    <div v-for="(line, li) in h.lines" :key="li"
+                                         :class="{'diff-line-add': line.type === 'add', 'diff-line-del': line.type === 'del'}"
+                                         style="display:flex; padding:1px 12px; line-height:1.5;">
+                                        <span style="width:36px; color:var(--text-muted); user-select:none; flex-shrink:0;">[[ line.old_lineno || '' ]]</span>
+                                        <span style="width:36px; color:var(--text-muted); user-select:none; flex-shrink:0;">[[ line.new_lineno || '' ]]</span>
+                                        <span style="white-space:pre-wrap; word-break:break-all;">[[ line.text ]]</span>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                        <pre v-else class="diff-content" style="margin:0; padding:12px; max-height:350px; overflow-y:auto;">[[ diffContent ]]</pre>
                     </div>
                 </div>
             </div>
