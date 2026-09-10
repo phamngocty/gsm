@@ -48,12 +48,35 @@ const app = createApp({
 
         // Git graph
         const graphData = ref([]);
-        const graphRowHeight = 32;
-        const graphSvgWidth = 120;
         const selectedCommit = ref(null);
-
-        // Graph colors for branch lines
+        const graphRowHeight = 36;
         const graphColors = ['#7c5cfc', '#60a5fa', '#4ade80', '#fb923c', '#f87171', '#22d3ee', '#facc15', '#c084fc', '#34d399', '#f472b6'];
+        const graphSvgWidth = computed(() => {
+            if (!graphData.value || !graphData.value.length) return 80;
+            let maxLane = 1;
+            for (const r of graphData.value) {
+                if (typeof r.lane === 'number' && r.lane > maxLane) maxLane = r.lane;
+                if (Array.isArray(r.parent_lanes)) {
+                    for (const pl of r.parent_lanes) {
+                        if (pl > maxLane) maxLane = pl;
+                    }
+                }
+                if (Array.isArray(r.active_lanes)) {
+                    for (const al of r.active_lanes) {
+                        if (al > maxLane) maxLane = al;
+                    }
+                }
+            }
+            return Math.min(260, Math.max(70, (maxLane + 1) * 20 + 16));
+        });
+
+        function getLaneX(lane) {
+            return (lane || 0) * 20 + 14;
+        }
+
+        function getLaneColor(lane) {
+            return graphColors[(lane || 0) % graphColors.length];
+        }
 
         function parseRefs(refsStr) {
             if (!refsStr) return [];
@@ -1475,6 +1498,7 @@ const app = createApp({
             otaReleaseTag, otaAppVerCode, otaFwVerCode, otaApkPath, otaBinPath, otaOledBinPath, otaChangelog, otaLoading, otaDetecting, otaResult,
             browseOtaFile, submitOtaRelease, autoDetectOtaAssets,
             graphData, graphRowHeight, graphSvgWidth, selectedCommit, selectedCommitDiff, contextMenu, commitNodeClass, formatDateVerbose, showContextMenu, openFileInExplorer, checkoutCommit, promptCreateBranchFromCommit, fetchGraph, renderGraphSegments,
+            getLaneX, getLaneColor,
             setCommitPreset, parseRefs, authorColor, authorInitial,
             sidebarWidth, treeWidth, isResizingSidebar, isResizingTree,
             startResizeSidebar, startResizeTree,

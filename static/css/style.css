@@ -360,24 +360,24 @@ body.resizing-sidebar .drag-handle-v { background: var(--accent); opacity: 0.5; 
 
 .graph-header { display: flex; align-items: center; background: var(--bg-surface); border-bottom: 1px solid var(--border); font-size: 10px; font-weight: 700; letter-spacing: 0.5px; color: var(--text-muted); text-transform: uppercase; }
 .graph-header-col { padding: 6px 8px; }
-.graph-header-graph { width: 120px; flex-shrink: 0; text-align: center; border-right: 1px solid var(--border); }
+.graph-header-graph { flex-shrink: 0; text-align: center; border-right: 1px solid var(--border); }
 .graph-header-msg { flex: 1; }
-.graph-header-action { width: 120px; flex-shrink: 0; }
+.graph-header-action { width: 165px; flex-shrink: 0; }
 
-.graph-row { display: flex; align-items: flex-start; gap: 0; padding: 0; cursor: pointer; transition: background 0.08s; border-bottom: 1px solid var(--border); min-height: 32px; }
+.graph-row { display: flex; align-items: center; gap: 0; padding: 0; cursor: pointer; transition: background 0.08s; border-bottom: 1px solid var(--border); min-height: 36px; }
 .graph-row:last-child { border-bottom: none; }
 .graph-row:hover { background: var(--bg-hover); }
 .graph-row-selected { background: rgba(124,92,252,0.15) !important; }
 
-/* SVG graph column - wider for GitKraken style */
-.graph-svg-col { flex-shrink: 0; width: 120px; height: 32px; overflow: visible; position: relative; border-right: 1px solid var(--border); }
+/* SVG graph column */
+.graph-svg-col { flex-shrink: 0; height: 36px; overflow: visible; position: relative; border-right: 1px solid var(--border); }
 .graph-svg { display: block; overflow: visible; }
 
-.graph-body { flex: 1; min-width: 0; padding: 4px 8px 4px 4px; }
+.graph-body { flex: 1; min-width: 0; padding: 4px 10px 4px 8px; }
 .graph-msg-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .graph-hash { font-size: 11px; color: var(--accent); cursor: pointer; font-family: var(--mono); }
 .graph-hash:hover { text-decoration: underline; }
-.graph-msg { font-size: 13px; font-weight: 500; color: var(--text-primary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.graph-msg { font-size: 13px; font-weight: 500; color: var(--text-primary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 500px; }
 .graph-refs { display: inline-flex; gap: 4px; flex-wrap: wrap; }
 .graph-ref-tag { font-size: 9px; padding: 1px 5px; border-radius: 3px; background: rgba(250,204,21,0.12); color: #facc15; border: 1px solid rgba(250,204,21,0.2); white-space: nowrap; }
 .graph-ref-branch { font-size: 9px; padding: 1px 5px; border-radius: 3px; background: rgba(96,165,250,0.12); color: #60a5fa; border: 1px solid rgba(96,165,250,0.2); white-space: nowrap; }
@@ -386,7 +386,7 @@ body.resizing-sidebar .drag-handle-v { background: var(--accent); opacity: 0.5; 
 .graph-author { color: var(--text-secondary); display: flex; align-items: center; gap: 4px; }
 .graph-author-avatar { display: inline-flex; align-items: center; justify-content: center; width: 18px; height: 18px; border-radius: 50%; font-size: 9px; font-weight: 600; color: #fff; flex-shrink: 0; }
 .graph-date { color: var(--text-muted); }
-.graph-actions { display: flex; gap: 4px; flex-shrink: 0; align-items: center; padding: 4px 8px; min-width: 170px; }
+.graph-actions { display: flex; gap: 4px; flex-shrink: 0; align-items: center; padding: 4px 8px; width: 165px; justify-content: flex-end; }
 
 /* ─── Diff Lines & Inspector ─── */
 .diff-line-add { background: rgba(46, 160, 67, 0.15) !important; color: #3fb950 !important; }

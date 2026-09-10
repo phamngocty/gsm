@@ -351,23 +351,22 @@ def git_list_files(project_path: str, branch: str = "") -> list[dict]:
 
 
 def git_tree(project_path: str, branch: str = "") -> list[dict]:
-    """Get the full file tree (directories first, then files)."""
+    """Get the full file tree (directories first, then files) without duplicates."""
     result = []
-    args = ["ls-tree", "-r", "-t", "--name-only", branch if branch else "HEAD"]
+    args = ["ls-tree", "-r", "-t", branch if branch else "HEAD"]
     r = _run_git(args, cwd=project_path)
     if r.returncode != 0: return result
-    paths = [l.strip() for l in r.stdout.splitlines() if l.strip()]
-    dirs_seen = set()
-    for p in paths:
-        parts = p.split("/")
-        # Add directories
-        for i in range(len(parts)):
-            d = "/".join(parts[:i+1]) if i < len(parts) - 1 else None
-            if d and d not in dirs_seen:
-                dirs_seen.add(d)
-                result.append({"type": "dir", "path": d, "name": parts[i]})
-        # Add file
-        result.append({"type": "file", "path": p, "name": parts[-1]})
+    for line in r.stdout.splitlines():
+        line = line.strip()
+        if not line: continue
+        parts = line.split(None, 3)
+        if len(parts) < 4: continue
+        obj_type, path = parts[1], parts[3]
+        name = path.rsplit("/", 1)[-1]
+        if obj_type == "tree":
+            result.append({"type": "dir", "path": path, "name": name})
+        else:
+            result.append({"type": "file", "path": path, "name": name})
     return result
 
 
@@ -379,65 +378,81 @@ def git_read_file(project_path: str, file_path: str, branch: str = "") -> Option
 
 
 def git_log_graph(project_path: str, limit: int = 50, all_branches: bool = True) -> list[dict]:
-    """Get commit log with ASCII graph (branch/merge visualization).
+    """Get commit log with topological branch lanes for graphical visualization.
 
     Returns list of dicts:
-      { "graph": str, "hash": str, "message": str, "author": str, "date": str, "refs": str }
-    where `graph` is the raw ASCII graph prefix (e.g. "* | |").
+      { "hash": str, "full_hash": str, "message": str, "author": str, "date": str,
+        "refs": str, "lane": int, "parent_lanes": list[int], "active_lanes": list[int] }
+    Every item corresponds to an actual commit without empty/blank phantom rows.
     """
     result = []
-    args = ["log", "--graph", "--oneline", f"--max-count={limit}",
-            "--format=%H|%s|%an|%ai|%d", "--no-color"]
+    args = ["log", f"--max-count={limit}", "--topo-order", "--format=%H|%P|%s|%an|%ai|%d"]
     if all_branches:
         args.insert(1, "--all")
     r = _run_git(args, cwd=project_path)
     if r.returncode != 0:
         return result
 
+    commits = []
     for line in r.stdout.splitlines():
-        line = line.rstrip()
+        line = line.strip()
         if not line:
             continue
-        # Split: graph part (starts with * / | \ etc) vs commit info
-        # git log --graph outputs graph chars then commit hash
-        # Find the first commit hash (40 chars hex)
-        raw = line
-        # The graph part consists of: *, |, /, \, _, ., space
-        # The commit info starts after the last graph char sequence
-        import re
-        # Match the last occurrence of a hex hash (7+ chars) in the line
-        match = re.search(r'([0-9a-f]{7,40})\|', line)
-        if not match:
-            # Fallback: try to find hash at the end or middle
-            match = re.search(r'([0-9a-f]{7,40})', line)
-        if match:
-            hash_start = match.start(1)
-            graph_part = line[:hash_start].rstrip()
-            info_part = line[hash_start:]
-            parts = info_part.split("|", 4)
-            if len(parts) >= 4:
-                result.append({
-                    "graph": graph_part,
-                    "hash": parts[0][:8],
-                    "full_hash": parts[0],
-                    "message": parts[1],
-                    "author": parts[2],
-                    "date": parts[3],
-                    "refs": parts[4] if len(parts) > 4 else "",
-                    "raw": raw,
-                })
-        else:
-            # Line without commit (continuation of graph)
-            result.append({
-                "graph": line.rstrip(),
-                "hash": "",
-                "message": "",
-                "author": "",
-                "date": "",
-                "refs": "",
-                "raw": raw,
+        parts = line.split("|", 5)
+        if len(parts) >= 5:
+            full_hash = parts[0]
+            parents = parts[1].split() if parts[1] else []
+            commits.append({
+                "hash": full_hash[:8],
+                "full_hash": full_hash,
+                "parents": parents,
+                "message": parts[2],
+                "author": parts[3],
+                "date": parts[4],
+                "refs": parts[5] if len(parts) > 5 else "",
+                "graph": "*",
             })
-    return result
+
+    # Lane assignment algorithm
+    lanes = []  # lanes[i] = full_hash of commit expected in this lane
+    for c in commits:
+        h = c["full_hash"]
+        if h in lanes:
+            lane = lanes.index(h)
+        else:
+            try:
+                lane = lanes.index(None)
+                lanes[lane] = h
+            except ValueError:
+                lane = len(lanes)
+                lanes.append(h)
+        c["lane"] = lane
+
+        # Connect to parents
+        parent_lanes = []
+        c_parents = c["parents"]
+        if c_parents:
+            p0 = c_parents[0]
+            lanes[lane] = p0
+            parent_lanes.append(lane)
+            for p in c_parents[1:]:
+                if p in lanes:
+                    parent_lanes.append(lanes.index(p))
+                else:
+                    try:
+                        p_lane = lanes.index(None)
+                        lanes[p_lane] = p
+                    except ValueError:
+                        p_lane = len(lanes)
+                        lanes.append(p)
+                    parent_lanes.append(p_lane)
+        else:
+            lanes[lane] = None
+
+        c["parent_lanes"] = parent_lanes
+        c["active_lanes"] = [i for i, x in enumerate(lanes) if x is not None and i != lane]
+
+    return commits
 
 
 def git_archive_zip(project_path: str, ref: str, output_path: str) -> dict:

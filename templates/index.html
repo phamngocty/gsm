@@ -30,30 +30,6 @@
             <button class="nav-btn" :class="{ active: navTab === 'github_browse' }" @click="navTab='github_browse';selectedProject=null;fetchDashboardGithubRepos()">🐙 Kho GitHub</button>
             <button class="nav-btn" :class="{ active: navTab === 'settings' }" @click="openSettings">⚙️ Cài đặt</button>
         </nav>
-        <!-- Compact graph in sidebar -->
-        <div v-if="selectedProject && isGitRepo && graphData.length > 0" class="sidebar-section sidebar-graph">
-            <div class="sidebar-section-title">🌳 GRAPH</div>
-            <div class="sidebar-graph-list">
-                <div v-for="(row, idx) in graphData.slice(0, 30)" :key="idx" class="sidebar-graph-row"
-                     @click="selectedCommit = row"
-                     :class="{ 'sidebar-graph-selected': selectedCommit && (selectedCommit.full_hash === row.full_hash || selectedCommit.hash === row.hash) }"
-                     :title="row.message">
-                    <svg width="60" height="16" class="sidebar-graph-svg">
-                        <template v-for="(seg, si) in renderGraphSegments(row.graph, idx)" :key="si">
-                            <line v-if="seg.type === 'vert'" :x1="seg.x - 4" y1="0" :x2="seg.x - 4" y2="16"
-                                  :stroke="seg.color" stroke-width="2" opacity="0.6"/>
-                            <line v-if="seg.type === 'slash'" :x1="seg.x1 - 4" y1="0" :x2="seg.x2 - 4" y2="16"
-                                  :stroke="seg.color" stroke-width="2" opacity="0.6"/>
-                            <line v-if="seg.type === 'backslash'" :x1="seg.x1 - 4" y1="0" :x2="seg.x2 - 4" y2="16"
-                                  :stroke="seg.color" stroke-width="2" opacity="0.6"/>
-                            <circle v-if="seg.type === 'node'" :cx="seg.x - 4" cy="8" r="3"
-                                    :fill="seg.color" stroke="white" stroke-width="1"/>
-                        </template>
-                    </svg>
-                    <span class="sidebar-graph-msg">[[ row.message ]]</span>
-                </div>
-            </div>
-        </div>
         <!-- Branch tree in sidebar -->
         <div v-if="selectedProject && isGitRepo && branches.length > 1" class="sidebar-section">
             <div class="sidebar-section-title">🌿 Nhánh</div>
@@ -621,38 +597,52 @@
                             <!-- Column headers -->
                             <div v-if="graphData.length > 0" class="graph-table">
                                 <div class="graph-header">
-                                    <div class="graph-header-col graph-header-graph">🌳 GRAPH</div>
+                                    <div class="graph-header-col graph-header-graph" :style="{ width: graphSvgWidth + 'px' }">🌳 GRAPH</div>
                                     <div class="graph-header-col graph-header-msg">💬 COMMIT MESSAGE</div>
-                                    <div class="graph-header-col graph-header-action"></div>
+                                    <div class="graph-header-col graph-header-action" style="width:165px;"></div>
                                 </div>
-                                <div v-for="(row, idx) in graphData" :key="idx" class="graph-row"
+                                <div v-for="(row, idx) in graphData" :key="row.full_hash || row.hash || idx" class="graph-row"
                                      @click="selectedCommit = row"
                                      :class="{ 'graph-row-selected': selectedCommit && (selectedCommit.full_hash === row.full_hash || selectedCommit.hash === row.hash) }">
-                                    <!-- Graph lines rendered as SVG -->
-                                    <div class="graph-svg-col">
+                                    <!-- Graph lines rendered as SVG with seamless lane routes -->
+                                    <div class="graph-svg-col" :style="{ width: graphSvgWidth + 'px', height: graphRowHeight + 'px' }">
                                         <svg :width="graphSvgWidth" :height="graphRowHeight" class="graph-svg">
-                                            <template v-for="(seg, si) in renderGraphSegments(row.graph, idx)" :key="si">
-                                                <!-- Vertical line -->
-                                                <line v-if="seg.type === 'vert'" :x1="seg.x" y1="0" :x2="seg.x" :y2="graphRowHeight"
-                                                      :stroke="seg.color" stroke-width="2.5" opacity="0.7"/>
-                                                <!-- Slash / -->
-                                                <line v-if="seg.type === 'slash'" :x1="seg.x1" y1="0" :x2="seg.x2" :y2="graphRowHeight"
-                                                      :stroke="seg.color" stroke-width="2.5" opacity="0.7"/>
-                                                <!-- Backslash \ -->
-                                                <line v-if="seg.type === 'backslash'" :x1="seg.x1" y1="0" :x2="seg.x2" :y2="graphRowHeight"
-                                                      :stroke="seg.color" stroke-width="2.5" opacity="0.7"/>
-                                                <!-- Node dot - bigger with border -->
-                                                <template v-if="seg.type === 'node'">
-                                                    <circle :cx="seg.x" cy="16" r="7" :fill="seg.color" opacity="0.2"/>
-                                                    <circle :cx="seg.x" cy="16" r="5" :fill="seg.color" stroke="#1e1e2e" stroke-width="2.5"/>
-                                                </template>
+                                            <!-- Pass-through continuous vertical tracks for other active lanes -->
+                                            <line v-for="l in (row.active_lanes || [])" :key="'active-' + l"
+                                                  :x1="getLaneX(l)" y1="0" :x2="getLaneX(l)" :y2="graphRowHeight"
+                                                  :stroke="getLaneColor(l)" stroke-width="2.5" opacity="0.6" stroke-linecap="round"/>
+                                            
+                                            <!-- Line from top into current node (child to this commit) -->
+                                            <line v-if="idx > 0"
+                                                  :x1="getLaneX(row.lane || 0)" y1="0"
+                                                  :x2="getLaneX(row.lane || 0)" :y2="graphRowHeight / 2"
+                                                  :stroke="getLaneColor(row.lane || 0)" stroke-width="2.5" stroke-linecap="round"/>
+                                            
+                                            <!-- Connections from current node down to parents -->
+                                            <template v-for="pl in (row.parent_lanes || [row.lane || 0])" :key="'pl-' + pl">
+                                                <!-- Direct vertical line if in same lane -->
+                                                <line v-if="pl === (row.lane || 0)"
+                                                      :x1="getLaneX(row.lane || 0)" :y1="graphRowHeight / 2"
+                                                      :x2="getLaneX(pl)" :y2="graphRowHeight"
+                                                      :stroke="getLaneColor(row.lane || 0)" stroke-width="2.5" stroke-linecap="round"/>
+                                                <!-- Smooth Bezier curve if connecting to another lane -->
+                                                <path v-else
+                                                      :d="'M ' + getLaneX(row.lane || 0) + ',' + (graphRowHeight / 2) + ' C ' + getLaneX(row.lane || 0) + ',' + graphRowHeight + ' ' + getLaneX(pl) + ',' + (graphRowHeight / 2) + ' ' + getLaneX(pl) + ',' + graphRowHeight"
+                                                      :stroke="getLaneColor(pl)" stroke-width="2.5" fill="none" opacity="0.85" stroke-linecap="round"/>
                                             </template>
+                                            
+                                            <!-- Node Halo Glow -->
+                                            <circle :cx="getLaneX(row.lane || 0)" :cy="graphRowHeight / 2" r="7"
+                                                    :fill="getLaneColor(row.lane || 0)" opacity="0.25"/>
+                                            <!-- Node Circle Dot -->
+                                            <circle :cx="getLaneX(row.lane || 0)" :cy="graphRowHeight / 2" r="4.5"
+                                                    :fill="getLaneColor(row.lane || 0)" stroke="#1e1e2e" stroke-width="2"/>
                                         </svg>
                                     </div>
-                                    <div class="graph-body" v-if="row.hash">
+                                    <div class="graph-body">
                                         <div class="graph-msg-row">
-                                            <span class="graph-hash mono">[[ row.hash ]]</span>
-                                            <span class="graph-msg">[[ row.message ]]</span>
+                                            <span class="graph-hash mono" title="Click xem chi tiết">[[ row.hash ]]</span>
+                                            <span class="graph-msg" :title="row.message">[[ row.message ]]</span>
                                             <span class="graph-refs" v-if="row.refs">
                                                 <template v-for="ref in parseRefs(row.refs)" :key="ref.name">
                                                     <span v-if="ref.type === 'tag'" class="graph-ref-tag">🏷️ [[ ref.name ]]</span>
@@ -669,13 +659,10 @@
                                             <span class="graph-date">🕐 [[ formatDateVerbose(row.date) ]]</span>
                                         </div>
                                     </div>
-                                    <div class="graph-actions" v-if="row.hash" @click.stop>
-                                        <a class="btn btn-xs btn-secondary" :href="'/api/git/archive-zip?id=' + selectedProject.id + '&ref=' + (row.full_hash || row.hash)" target="_blank" title="Tải mã nguồn commit này (.ZIP)">📥</a>
-                                        <button class="btn btn-xs btn-secondary" @click.stop="promptCreateBranchFromCommit(row.full_hash || row.hash)" title="Tạo nhánh mới từ commit này">🌿</button>
-                                        <button class="btn btn-xs" @click.stop="checkoutCommit(row.hash)" title="Checkout commit này">🔀</button>
-                                        <button class="btn btn-xs" @click.stop="resetToCommit(row.hash, 'soft')" title="Reset soft (giữ nguyên thay đổi)">🔽</button>
-                                        <button class="btn btn-xs" @click.stop="resetToCommit(row.hash, 'mixed')" title="Reset mixed (bỏ stage)">⏹</button>
-                                        <button class="btn btn-xs btn-danger" @click.stop="resetToCommit(row.hash, 'hard')" title="⚠️ Reset hard (mất hết thay đổi)">⏏️</button>
+                                    <div class="graph-actions" @click.stop>
+                                        <a class="btn btn-xs btn-secondary" :href="'/api/git/archive-zip?id=' + selectedProject.id + '&ref=' + (row.full_hash || row.hash)" target="_blank" title="Tải mã nguồn commit này (.ZIP)">📥 ZIP</a>
+                                        <button class="btn btn-xs btn-secondary" @click.stop="promptCreateBranchFromCommit(row.full_hash || row.hash)" title="Tạo nhánh mới từ commit này">🌿 Nhánh</button>
+                                        <button class="btn btn-xs" @click.stop="selectedCommit = row" title="Xem chi tiết diff & tùy chọn">🔍 Xem</button>
                                     </div>
                                 </div>
                             </div>
@@ -697,6 +684,7 @@
                                         <a class="btn btn-xs btn-primary" :href="'/api/git/archive-zip?id=' + selectedProject.id + '&ref=' + (selectedCommit.full_hash || selectedCommit.hash)" target="_blank">📥 Tải ZIP</a>
                                         <button class="btn btn-xs btn-secondary" @click="promptCreateBranchFromCommit(selectedCommit.full_hash || selectedCommit.hash)">🌿 Tạo nhánh</button>
                                         <button class="btn btn-xs" @click="checkoutCommit(selectedCommit.hash)">🔀 Checkout</button>
+                                        <button class="btn btn-xs btn-danger" @click="resetTarget = (selectedCommit.full_hash || selectedCommit.hash); showResetPanel = true; showResetConfirm = true;" title="Mở tùy chọn Reset/Revert">⏪ Khôi phục</button>
                                         <button class="btn btn-xs btn-close" @click="selectedCommit = null">✖</button>
                                     </div>
                                 </div>

@@ -186,5 +186,46 @@ class TestOtaDecoupling(unittest.TestCase):
         self.assertEqual(res.mimetype, "application/zip")
 
 
+class TestGitGraphAndTree(unittest.TestCase):
+
+    def test_git_log_graph_structure(self):
+        from gsm.git_utils import git_log_graph
+        repo_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+        commits = git_log_graph(repo_dir, limit=20)
+        self.assertIsInstance(commits, list)
+        self.assertGreater(len(commits), 0)
+        for c in commits:
+            self.assertTrue(bool(c.get("hash")), "Commit hash must not be empty (no blank rows)")
+            self.assertIn("lane", c)
+            self.assertIsInstance(c["lane"], int)
+            self.assertIn("parent_lanes", c)
+            self.assertIsInstance(c["parent_lanes"], list)
+            self.assertIn("active_lanes", c)
+            self.assertIsInstance(c["active_lanes"], list)
+
+    def test_git_tree_no_duplicates(self):
+        from gsm.git_utils import git_tree
+        repo_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+        items = git_tree(repo_dir)
+        self.assertIsInstance(items, list)
+        paths = [item["path"] for item in items]
+        self.assertEqual(len(paths), len(set(paths)), "Tree paths must be unique without duplicate dirs/files")
+
+    @patch("app.load_projects")
+    def test_api_graph_endpoint(self, mock_load_projects):
+        import app
+        repo_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+        mock_load_projects.return_value = [{"id": "test_p1", "name": "gsm_test", "path": repo_dir}]
+
+        client = app.app.test_client()
+        res = client.post("/api/projects/test_p1/git/graph", json={"limit": 10})
+        self.assertEqual(res.status_code, 200)
+        data = res.get_json()
+        self.assertIsInstance(data, list)
+        self.assertGreater(len(data), 0)
+        self.assertTrue(bool(data[0].get("hash")))
+
+
 if __name__ == "__main__":
     unittest.main()
+
