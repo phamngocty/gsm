@@ -1477,6 +1477,99 @@ const app = createApp({
             }
         }
 
+        // ── OTA Documentation & Prompt Helpers ──
+        const otaSubTab = ref('form'); // 'form' | 'guide' | 'prompt'
+        const otaInitLoading = ref(false);
+
+        function copyOtaSnippet(text, label) {
+            if (navigator.clipboard && navigator.clipboard.writeText) {
+                navigator.clipboard.writeText(text).then(() => {
+                    toast(`📋 Đã sao chép ${label || 'mã nguồn'}!`, 'success');
+                }).catch(() => {
+                    copyText(text);
+                });
+            } else {
+                copyText(text);
+            }
+        }
+
+        async function initOtaProjectTemplate() {
+            if (!selectedProject.value) return;
+            otaInitLoading.value = true;
+            try {
+                const resp = await fetch(`/api/projects/${selectedProject.value.id}/init-ota-template`, {
+                    method: 'POST'
+                });
+                const data = await resp.json();
+                if (data.success) {
+                    toast(data.message || 'Đã tạo file mẫu OTA thành công!', 'success');
+                    await autoDetectOtaAssets();
+                } else {
+                    toast(data.error || 'Lỗi khởi tạo file mẫu', 'error');
+                }
+            } catch (e) {
+                toast('Lỗi: ' + e.message, 'error');
+            } finally {
+                otaInitLoading.value = false;
+            }
+        }
+
+        const otaVersionJsonSample = computed(() => {
+            return `{\n  "app": {\n    "versionCode": 1,\n    "versionName": "1.0.0",\n    "apkUrl": "https://raw.githubusercontent.com/<user>/<repo>/releases/download/v1.0.0/app-release.apk",\n    "changelog": "• Bản phát hành đầu tiên\\n• Tính năng cơ bản"\n  },\n  "firmware": {\n    "versionCode": 1,\n    "versionName": "1.0.0",\n    "binUrl": "https://raw.githubusercontent.com/<user>/<repo>/releases/download/v1.0.0/firmware.bin",\n    "oledBinUrl": "",\n    "changelog": "• Khởi tạo firmware ban đầu"\n  }\n}`;
+        });
+
+        const otaEsp32WifiCode = computed(() => {
+            return `// ===============================================\n// NẠP FIRMWARE OTA QUA WIFI (ESP32 - PlatformIO / Arduino)\n// ===============================================\n#include <WiFi.h>\n#include <HTTPClient.h>\n#include <HTTPUpdate.h>\n#include <ArduinoJson.h>\n\nconst int CURRENT_FW_VERSION = 1; // Khai báo phiên bản hiện tại\nconst char* VERSION_CHECK_URL = "https://raw.githubusercontent.com/<user>/<repo>/main/version.json";\n\nvoid checkAndPerformWiFiOTA() {\n    if (WiFi.status() != WL_CONNECTED) return;\n\n    HTTPClient http;\n    http.begin(VERSION_CHECK_URL);\n    int httpCode = http.GET();\n\n    if (httpCode == HTTP_CODE_OK) {\n        String payload = http.getString();\n        DynamicJsonDocument doc(1024);\n        deserializeJson(doc, payload);\n\n        int remoteVer = doc["firmware"]["versionCode"];\n        const char* binUrl = doc["firmware"]["binUrl"];\n\n        if (remoteVer > CURRENT_FW_VERSION && binUrl != nullptr && strlen(binUrl) > 0) {\n            Serial.printf("🚀 Bản mới v%d > v%d! Đang tải & nạp OTA...\\n", remoteVer, CURRENT_FW_VERSION);\n            WiFiClient client;\n            httpUpdate.setLedPin(2, LOW); // Đèn báo nạp LED_BUILTIN\n            httpUpdate.rebootOnUpdate(true); // Tự khởi động lại khi nạp xong\n\n            t_httpUpdate_return ret = httpUpdate.update(client, binUrl);\n            if (ret == HTTP_UPDATE_FAILED) {\n                Serial.printf("❌ Lỗi nạp OTA (%d): %s\\n", httpUpdate.getLastError(), httpUpdate.getLastErrorString().c_str());\n            }\n        }\n    }\n    http.end();\n}`;
+        });
+
+        const otaEsp32BleCode = computed(() => {
+            return `// ===============================================\n// NẠP FIRMWARE OTA QUA BLUETOOTH BLE (Update.h)\n// Khi không có WiFi ngoài đường (nhận data từ Android)\n// ===============================================\n#include <Update.h>\n#include <NimBLEDevice.h>\n\n#define CHA_OTA_UUID "f0a1b2c3-d4e5-4f60-a012-bcdef0123456"\nbool isOtaMode = false;\nuint32_t otaExpectedSize = 0;\nuint32_t otaWritten = 0;\n\n// Trong BLE Characteristic Write Callback:\nvoid onOtaDataReceived(const uint8_t* data, size_t len) {\n    if (!isOtaMode && len >= 4) {\n        // Gói đầu tiên: 4 bytes kích thước file firmware.bin\n        memcpy(&otaExpectedSize, data, 4);\n        if (otaExpectedSize > 0 && Update.begin(otaExpectedSize, U_FLASH)) {\n            isOtaMode = true;\n            otaWritten = 0;\n            Serial.printf("BLE OTA: Bắt đầu nạp! Dung lượng: %d bytes\\n", otaExpectedSize);\n        }\n    } else if (isOtaMode) {\n        if (len == 1 && data[0] == 0x31) { // Mã hoàn tất nạp\n            if (Update.end(true)) {\n                Serial.println("✅ Nạp Firmware BLE OTA thành công! Đang khởi động lại...");\n                ESP.restart();\n            }\n            isOtaMode = false;\n        } else {\n            Update.write((uint8_t*)data, len);\n            otaWritten += len;\n        }\n    }\n}`;
+        });
+
+        const otaAndroidCode = computed(() => {
+            return `// ===============================================\n// ANDROID IN-APP UPDATE MANAGER (Kotlin Coroutine)\n// ===============================================\npackage com.example.app.utils\n\nimport android.content.Context\nimport android.content.Intent\nimport androidx.core.content.FileProvider\nimport kotlinx.coroutines.*\nimport org.json.JSONObject\nimport java.io.File\nimport java.net.URL\n\nobject UpdateManager {\n    fun checkUpdate(context: Context, versionUrl: String) {\n        CoroutineScope(Dispatchers.IO).launch {\n            try {\n                val jsonStr = URL(versionUrl).readText()\n                val json = JSONObject(jsonStr).getJSONObject("app")\n                val remoteCode = json.getInt("versionCode")\n                val apkUrl = json.getString("apkUrl")\n                val changelog = json.optString("changelog")\n\n                val currentCode = context.packageManager.getPackageInfo(context.packageName, 0).versionCode\n                if (remoteCode > currentCode) {\n                    withContext(Dispatchers.Main) {\n                        // 1. Hiển thị Dialog thông báo phiên bản mới\n                        // 2. Tải APK và mở Intent cài đặt:\n                        // val intent = Intent(Intent.ACTION_VIEW).apply {\n                        //     setDataAndType(apkUri, "application/vnd.android.package-archive")\n                        //     flags = Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_ACTIVITY_NEW_TASK\n                        // }\n                        // context.startActivity(intent)\n                    }\n                }\n            } catch (e: Exception) { e.printStackTrace() }\n        }\n    }\n}`;
+        });
+
+        const otaAiPrompt = computed(() => {
+            return `Bạn là một kỹ sư chuyên gia về Hệ thống Nhúng IoT (ESP32 / PlatformIO / Arduino C++) và Phát triển Ứng dụng Di động Android (Kotlin).
+Tôi muốn bạn viết mã nguồn hoàn chỉnh để tích hợp tính năng Cập Nhật Từ Xa OTA (Firmware OTA & In-App APK Update) cho dự án của tôi theo kiến trúc chuẩn phân phối phiên bản qua file version.json:
+
+1. KIẾN TRÚC HỆ THỐNG:
+- Máy chủ lưu trữ file metadata \`version.json\` trên GitHub/Gitea Release hoặc máy chủ NAS:
+{
+  "app": {
+    "versionCode": 2,
+    "versionName": "1.0.2",
+    "apkUrl": "https://<domain>/releases/download/v1.0.2/app-release.apk",
+    "changelog": "• Cập nhật giao diện mới\\n• Tối ưu hóa hiệu năng"
+  },
+  "firmware": {
+    "versionCode": 2,
+    "versionName": "1.0.2",
+    "binUrl": "https://<domain>/releases/download/v1.0.2/firmware.bin",
+    "oledBinUrl": "",
+    "changelog": "• Vá lỗi ngắt kết nối WiFi/BLE"
+  }
+}
+
+2. YÊU CẦU MÃ NGUỒN FIRMWARE ESP32 (C++ / PlatformIO):
+- Khai báo hằng số phiên bản hiện tại: \`const int CURRENT_FW_VERSION = 1;\`
+- Viết hàm kiểm tra và nạp OTA qua WiFi:
+  + Dùng HTTPClient gửi GET tới URL version.json.
+  + Dùng ArduinoJson parse lấy \`doc["firmware"]["versionCode"]\` và URL file .bin.
+  + So sánh: Nếu \`remoteVersion > CURRENT_FW_VERSION\`, dùng \`httpUpdate.update(client, binUrl)\` để nạp trực tiếp.
+  + Điều khiển LED báo trạng thái và tự động gọi \`ESP.restart()\` sau khi nạp thành công.
+- (Tùy chọn) Viết thêm kênh nạp firmware qua Bluetooth BLE (sử dụng thư viện \`Update.h\`) để nhận file firmware .bin truyền từ App Android khi không có mạng WiFi ngoài đường.
+
+3. YÊU CẦU MÃ NGUỒN ANDROID (Kotlin):
+- Viết module \`UpdateManager.kt\` sử dụng Kotlin Coroutine (Dispatchers.IO).
+- Tải file version.json, so sánh với \`BuildConfig.VERSION_CODE\`.
+- Nếu có phiên bản mới, hiển thị AlertDialog chứa Changelog ghi chú bản cập nhật.
+- Khi người dùng nhấn "Cập nhật", tải file APK và mở Intent cài đặt thông qua FileProvider an toàn trên Android 10+.
+
+Vui lòng viết mã nguồn chi tiết, hoàn chỉnh, có chú thích tiếng Việt dễ hiểu và cung cấp cấu hình platformio.ini cùng AndroidManifest.xml tương ứng.`;
+        });
+
         // ── Return ──
         return {
             navTab, goHome,
@@ -1497,6 +1590,8 @@ const app = createApp({
             fetchReleases, createRelease, deleteRelease, pushReleaseTag,
             otaReleaseTag, otaAppVerCode, otaFwVerCode, otaApkPath, otaBinPath, otaOledBinPath, otaChangelog, otaLoading, otaDetecting, otaResult,
             browseOtaFile, submitOtaRelease, autoDetectOtaAssets,
+            otaSubTab, otaInitLoading, initOtaProjectTemplate, copyOtaSnippet,
+            otaVersionJsonSample, otaEsp32WifiCode, otaEsp32BleCode, otaAndroidCode, otaAiPrompt,
             graphData, graphRowHeight, graphSvgWidth, selectedCommit, selectedCommitDiff, contextMenu, commitNodeClass, formatDateVerbose, showContextMenu, openFileInExplorer, checkoutCommit, promptCreateBranchFromCommit, fetchGraph, renderGraphSegments,
             getLaneX, getLaneColor,
             setCommitPreset, parseRefs, authorColor, authorInitial,

@@ -176,6 +176,168 @@ def api_project_toggle_ota(project_id):
     return jsonify({"success": True, "enable_ota": enable})
 
 
+@app.route("/api/projects/<project_id>/init-ota-template", methods=["POST"])
+def api_project_init_ota_template(project_id):
+    project = _find_project(project_id)
+    if not project: return jsonify({"error": "Không tìm thấy dự án"}), 404
+    path = project.get("path", "")
+    if not path or not os.path.isdir(path): return jsonify({"error": "Thư mục dự án không tồn tại"}), 400
+
+    created = []
+    version_file = os.path.join(path, "version.json")
+    if not os.path.exists(version_file):
+        sample_version = {
+            "app": {
+                "versionCode": 1,
+                "versionName": "1.0.0",
+                "apkUrl": "https://raw.githubusercontent.com/<user>/<repo>/releases/download/v1.0.0/app-release.apk",
+                "changelog": "Khởi tạo phiên bản đầu tiên"
+            },
+            "firmware": {
+                "versionCode": 1,
+                "versionName": "1.0.0",
+                "binUrl": "https://raw.githubusercontent.com/<user>/<repo>/releases/download/v1.0.0/firmware.bin",
+                "oledBinUrl": "",
+                "changelog": "Khởi tạo firmware ban đầu"
+            }
+        }
+        with open(version_file, "w", encoding="utf-8") as f:
+            json.dump(sample_version, f, indent=2, ensure_ascii=False)
+        created.append("version.json")
+
+    guide_file = os.path.join(path, "OTA_GUIDE.md")
+    if not os.path.exists(guide_file):
+        guide_content = """# 🚀 Hướng Dẫn Tích Hợp Cập Nhật OTA (Firmware & Android App)
+
+Tài liệu này hướng dẫn cách kết nối và tạo hệ thống tự động cập nhật Firmware OTA (ESP32) và Android App từ xa thông qua GitHub/Gitea Release.
+
+---
+
+## 1. Cơ Chế Hoạt Động (Architecture)
+1. **Lưu trữ Metadata (`version.json`)**: File `version.json` đặt tại root của repository hoặc trên hosting (GitHub Raw, Gitea Raw, NAS).
+2. **Kiểm tra phiên bản**:
+   - Thiết bị (ESP32) hoặc App (Android) định kỳ hoặc khi khởi động sẽ tải file `version.json`.
+   - So sánh `versionCode` trên server với `versionCode` hiện tại trong thiết bị.
+3. **Thực thi cập nhật**:
+   - Nếu `server.versionCode > local.versionCode`: Thiết bị tải file `.bin` (firmware) hoặc `.apk` (app) về và nạp vào bộ nhớ.
+
+---
+
+## 2. Cấu Trúc File `version.json` Mẫu
+```json
+{
+  "app": {
+    "versionCode": 1,
+    "versionName": "1.0.0",
+    "apkUrl": "https://<domain>/releases/download/v1.0.0/app-release.apk",
+    "changelog": "Khởi tạo phiên bản đầu tiên"
+  },
+  "firmware": {
+    "versionCode": 1,
+    "versionName": "1.0.0",
+    "binUrl": "https://<domain>/releases/download/v1.0.0/firmware.bin",
+    "changelog": "Khởi tạo firmware"
+  }
+}
+```
+
+---
+
+## 3. Mã Nguồn Mẫu Cho ESP32 (Arduino / PlatformIO - WiFi HTTP OTA)
+
+Thêm các thư viện cần thiết vào `platformio.ini`:
+```ini
+lib_deps =
+    bblanchon/ArduinoJson @ ^6.21.3
+```
+
+Trong file C++ (`main.cpp`):
+```cpp
+#include <WiFi.h>
+#include <HTTPClient.h>
+#include <HTTPUpdate.h>
+#include <ArduinoJson.h>
+
+const int CURRENT_FW_VERSION = 1;
+const char* VERSION_CHECK_URL = "https://raw.githubusercontent.com/<user>/<repo>/main/version.json";
+
+void checkAndPerformOTA() {
+    if (WiFi.status() != WL_CONNECTED) return;
+
+    HTTPClient http;
+    http.begin(VERSION_CHECK_URL);
+    int httpCode = http.GET();
+
+    if (httpCode == HTTP_CODE_OK) {
+        String payload = http.getString();
+        DynamicJsonDocument doc(1024);
+        deserializeJson(doc, payload);
+
+        int remoteVer = doc["firmware"]["versionCode"];
+        const char* binUrl = doc["firmware"]["binUrl"];
+
+        if (remoteVer > CURRENT_FW_VERSION && binUrl != nullptr && strlen(binUrl) > 0) {
+            Serial.printf("Phat hien ban moi: v%d -> v%d. Tien hanh nap OTA...\\n", CURRENT_FW_VERSION, remoteVer);
+            WiFiClient client;
+            httpUpdate.setLedPin(2, LOW); // Đèn báo nạp
+            t_httpUpdate_return ret = httpUpdate.update(client, binUrl);
+
+            switch (ret) {
+                case HTTP_UPDATE_FAILED:
+                    Serial.printf("Loi OTA: (%d): %s\\n", httpUpdate.getLastError(), httpUpdate.getLastErrorString().c_str());
+                    break;
+                case HTTP_UPDATE_NO_UPDATES:
+                    Serial.println("Khong co ban cap nhat moi.");
+                    break;
+                case HTTP_UPDATE_OK:
+                    Serial.println("Cap nhat thanh cong! Dang khoi dong lai...");
+                    break;
+            }
+        }
+    }
+    http.end();
+}
+```
+
+---
+
+## 4. Mã Nguồn Mẫu Cho Android (Kotlin)
+Đọc `version.json`, so sánh `BuildConfig.VERSION_CODE`, và mở intent cài đặt APK qua `FileProvider`:
+```kotlin
+fun checkAppUpdate(context: Context, versionUrl: String) {
+    CoroutineScope(Dispatchers.IO).launch {
+        try {
+            val jsonStr = URL(versionUrl).readText()
+            val jsonObj = JSONObject(jsonStr)
+            val appObj = jsonObj.getJSONObject("app")
+            val remoteVerCode = appObj.getInt("versionCode")
+            val apkUrl = appObj.getString("apkUrl")
+            val changelog = appObj.optString("changelog")
+
+            val currentVerCode = context.packageManager.getPackageInfo(context.packageName, 0).versionCode
+            if (remoteVerCode > currentVerCode) {
+                withContext(Dispatchers.Main) {
+                    // Hiển thị thông báo & tải APK về cài đặt
+                }
+            }
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
+    }
+}
+```
+"""
+        with open(guide_file, "w", encoding="utf-8") as f:
+            f.write(guide_content)
+        created.append("OTA_GUIDE.md")
+
+    return jsonify({
+        "success": True,
+        "created": created,
+        "message": f"Đã khởi tạo thành công: {', '.join(created)}" if created else "Các file version.json và OTA_GUIDE.md đã tồn tại sẵn trong dự án."
+    })
+
+
 @app.route("/api/projects/<project_id>/status", methods=["GET"])
 def api_project_status(project_id):
     project = _find_project(project_id)

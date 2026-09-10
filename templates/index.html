@@ -398,61 +398,141 @@
                     </div>
                 </div>
 
-                <!-- OTA Release Form (Chỉ hiển thị khi bật tiện ích OTA) -->
-                <div v-if="selectedProject.enable_ota" class="release-create" style="margin-bottom:16px;padding:12px;background:var(--bg-secondary);border:1px dashed var(--accent);border-radius:var(--radius)">
-                    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">
-                        <h4 style="margin:0;color:var(--accent)">📡 Nạp Firmware Cập Nhật OTA (ESP32 & App APK)</h4>
-                        <button class="btn btn-secondary btn-sm" @click="autoDetectOtaAssets" :disabled="otaDetecting">
-                            [[ otaDetecting ? '🔍 Đang quét...' : '🔍 Tự Động Quét File Build' ]]
+                <!-- OTA Release & Documentation Panel (Chỉ hiển thị khi bật tiện ích OTA) -->
+                <div v-if="selectedProject.enable_ota" class="release-create" style="margin-bottom:16px;padding:14px;background:var(--bg-secondary);border:1px dashed var(--accent);border-radius:var(--radius)">
+                    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
+                        <h4 style="margin:0;color:var(--accent);display:flex;align-items:center;gap:8px">
+                            <span>📡</span> Quản Lý Cập Nhật OTA (ESP32 Firmware & Android App)
+                        </h4>
+                        <div style="display:flex;gap:6px">
+                            <button v-if="otaSubTab === 'form'" class="btn btn-secondary btn-sm" @click="autoDetectOtaAssets" :disabled="otaDetecting">
+                                [[ otaDetecting ? '🔍 Đang quét...' : '🔍 Tự Động Quét File Build' ]]
+                            </button>
+                            <button v-if="otaSubTab === 'guide'" class="btn btn-primary btn-sm" @click="initOtaProjectTemplate" :disabled="otaInitLoading" title="Tạo tự động version.json và OTA_GUIDE.md trong thư mục dự án">
+                                [[ otaInitLoading ? '⏳ Đang khởi tạo...' : '📄 1-Click Tạo File Mẫu Vào Dự Án' ]]
+                            </button>
+                        </div>
+                    </div>
+
+                    <!-- Navigation Subtabs -->
+                    <div class="ota-nav-tabs">
+                        <button class="ota-tab-btn" :class="{ active: otaSubTab === 'form' }" @click="otaSubTab = 'form'">
+                            📡 Nạp Release OTA
+                        </button>
+                        <button class="ota-tab-btn" :class="{ active: otaSubTab === 'guide' }" @click="otaSubTab = 'guide'">
+                            📖 Hướng Dẫn & Code Mẫu
+                        </button>
+                        <button class="ota-tab-btn" :class="{ active: otaSubTab === 'prompt' }" @click="otaSubTab = 'prompt'">
+                            🤖 Prompt AI Tạo Dự Án Mới
                         </button>
                     </div>
-                    <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;margin-bottom:8px">
-                        <div class="form-group">
-                            <label>Tên Tag (Release Tag)</label>
-                            <input type="text" v-model="otaReleaseTag" class="form-input" placeholder="v1.0.1">
+
+                    <!-- SUBTAB 1: Form Nạp Firmware & APK -->
+                    <div v-if="otaSubTab === 'form'">
+                        <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;margin-bottom:8px">
+                            <div class="form-group">
+                                <label>Tên Tag (Release Tag)</label>
+                                <input type="text" v-model="otaReleaseTag" class="form-input" placeholder="v1.0.1">
+                            </div>
+                            <div class="form-group">
+                                <label>App Version Code</label>
+                                <input type="number" v-model="otaAppVerCode" class="form-input">
+                            </div>
+                            <div class="form-group">
+                                <label>Firmware Version Code</label>
+                                <input type="number" v-model="otaFwVerCode" class="form-input">
+                            </div>
                         </div>
                         <div class="form-group">
-                            <label>App Version Code</label>
-                            <input type="number" v-model="otaAppVerCode" class="form-input">
+                            <label>Đường dẫn File Android App (.apk)</label>
+                            <div class="input-row">
+                                <input type="text" v-model="otaApkPath" class="form-input mono" placeholder="C:\...\TYMAP.apk">
+                                <button class="btn btn-secondary btn-sm" @click="browseOtaFile('apk')">📁 Duyệt APK...</button>
+                            </div>
                         </div>
                         <div class="form-group">
-                            <label>Firmware Version Code</label>
-                            <input type="number" v-model="otaFwVerCode" class="form-input">
+                            <label>Đường dẫn File Firmware ESP32 GC9A01 / Tròn (.bin)</label>
+                            <div class="input-row">
+                                <input type="text" v-model="otaBinPath" class="form-input mono" placeholder="C:\...\firmware.bin">
+                                <button class="btn btn-secondary btn-sm" @click="browseOtaFile('bin')">📁 Duyệt GC9A01...</button>
+                            </div>
+                        </div>
+                        <div class="form-group">
+                            <label>Đường dẫn File Firmware ESP32 OLED (.bin)</label>
+                            <div class="input-row">
+                                <input type="text" v-model="otaOledBinPath" class="form-input mono" placeholder="C:\...\firmware.bin">
+                                <button class="btn btn-secondary btn-sm" @click="browseOtaFile('oled_bin')">📁 Duyệt OLED...</button>
+                            </div>
+                        </div>
+                        <div class="form-group">
+                            <label>Nội dung cập nhật (Changelog)</label>
+                            <textarea v-model="otaChangelog" class="form-input" rows="2" placeholder="Ghi chú nâng cấp..."></textarea>
+                        </div>
+                        <button class="btn btn-primary btn-full" @click="submitOtaRelease" :disabled="otaLoading">
+                            [[ otaLoading ? '⏳ Đang upload & cập nhật OTA...' : '🚀 Tạo Release & Đẩy OTA sang Gitea + GitHub' ]]
+                        </button>
+                        <div v-if="otaResult" class="result-box" :class="otaResult.success ? 'success' : 'error'" style="margin-top:8px">
+                            <div v-if="otaResult.success">
+                                <div v-for="log in otaResult.logs" :key="log">[[ log ]]</div>
+                            </div>
+                            <div v-else>[[ otaResult.error ]]</div>
                         </div>
                     </div>
-                    <div class="form-group">
-                        <label>Đường dẫn File Android App (.apk)</label>
-                        <div class="input-row">
-                            <input type="text" v-model="otaApkPath" class="form-input mono" placeholder="C:\...\TYMAP.apk">
-                            <button class="btn btn-secondary btn-sm" @click="browseOtaFile('apk')">📁 Duyệt APK...</button>
+
+                    <!-- SUBTAB 2: Hướng dẫn chi tiết & Mã nguồn mẫu -->
+                    <div v-if="otaSubTab === 'guide'">
+                        <div style="margin-bottom:12px;font-size:12.5px;color:var(--text-secondary);line-height:1.6">
+                            💡 <strong>Kiến trúc OTA:</strong> Đặt file <code>version.json</code> tại root repo (hoặc máy chủ hosting). Thiết bị/App khi bật sẽ đọc file này, nếu <code>versionCode</code> lớn hơn bản hiện tại sẽ tự động tải file <code>.bin</code> hoặc <code>.apk</code> tương ứng để nạp vào bộ nhớ.
+                        </div>
+
+                        <!-- Card 1: version.json -->
+                        <div class="ota-snippet-card">
+                            <div class="ota-snippet-header">
+                                <h5><span class="ota-badge">1</span> File Cấu Hình Phiên Bản (version.json)</h5>
+                                <button class="btn btn-secondary btn-xs" @click="copyOtaSnippet(otaVersionJsonSample, 'cấu trúc version.json')">📋 Sao chép version.json</button>
+                            </div>
+                            <pre class="ota-code-pre">[[ otaVersionJsonSample ]]</pre>
+                        </div>
+
+                        <!-- Card 2: ESP32 WiFi OTA -->
+                        <div class="ota-snippet-card">
+                            <div class="ota-snippet-header">
+                                <h5><span class="ota-badge">2</span> Code Mẫu ESP32 C++: Nạp OTA Qua WiFi (HTTPUpdate.h)</h5>
+                                <button class="btn btn-secondary btn-xs" @click="copyOtaSnippet(otaEsp32WifiCode, 'code C++ WiFi OTA')">📋 Sao chép C++ WiFi OTA</button>
+                            </div>
+                            <pre class="ota-code-pre">[[ otaEsp32WifiCode ]]</pre>
+                        </div>
+
+                        <!-- Card 3: ESP32 BLE OTA -->
+                        <div class="ota-snippet-card">
+                            <div class="ota-snippet-header">
+                                <h5><span class="ota-badge">3</span> Code Mẫu ESP32 C++: Nạp OTA Qua Bluetooth BLE (Update.h)</h5>
+                                <button class="btn btn-secondary btn-xs" @click="copyOtaSnippet(otaEsp32BleCode, 'code C++ BLE OTA')">📋 Sao chép C++ BLE OTA</button>
+                            </div>
+                            <pre class="ota-code-pre">[[ otaEsp32BleCode ]]</pre>
+                        </div>
+
+                        <!-- Card 4: Android App Kotlin -->
+                        <div class="ota-snippet-card">
+                            <div class="ota-snippet-header">
+                                <h5><span class="ota-badge">4</span> Code Mẫu Android Kotlin: Tự Động Kiểm Tra & Tải Cập Nhật APK</h5>
+                                <button class="btn btn-secondary btn-xs" @click="copyOtaSnippet(otaAndroidCode, 'code Kotlin Android')">📋 Sao chép Kotlin UpdateManager</button>
+                            </div>
+                            <pre class="ota-code-pre">[[ otaAndroidCode ]]</pre>
                         </div>
                     </div>
-                    <div class="form-group">
-                        <label>Đường dẫn File Firmware ESP32 GC9A01 / Tròn (.bin)</label>
-                        <div class="input-row">
-                            <input type="text" v-model="otaBinPath" class="form-input mono" placeholder="C:\...\firmware.bin">
-                            <button class="btn btn-secondary btn-sm" @click="browseOtaFile('bin')">📁 Duyệt GC9A01...</button>
+
+                    <!-- SUBTAB 3: AI Prompt Template -->
+                    <div v-if="otaSubTab === 'prompt'">
+                        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">
+                            <span style="font-size:12.5px;color:var(--text-secondary)">
+                                📋 Sao chép toàn bộ Prompt dưới đây và dán vào AI (ChatGPT / Claude / Gemini / Antigravity) để AI tự động tạo trọn gói tính năng OTA cho dự án mới của bạn:
+                            </span>
+                            <button class="btn btn-primary btn-sm" @click="copyOtaSnippet(otaAiPrompt, 'toàn bộ Prompt cho AI')">
+                                📋 Sao Chép Toàn Bộ Prompt
+                            </button>
                         </div>
-                    </div>
-                    <div class="form-group">
-                        <label>Đường dẫn File Firmware ESP32 OLED (.bin)</label>
-                        <div class="input-row">
-                            <input type="text" v-model="otaOledBinPath" class="form-input mono" placeholder="C:\...\firmware.bin">
-                            <button class="btn btn-secondary btn-sm" @click="browseOtaFile('oled_bin')">📁 Duyệt OLED...</button>
-                        </div>
-                    </div>
-                    <div class="form-group">
-                        <label>Nội dung cập nhật (Changelog)</label>
-                        <textarea v-model="otaChangelog" class="form-input" rows="2" placeholder="Ghi chú nâng cấp..."></textarea>
-                    </div>
-                    <button class="btn btn-primary btn-full" @click="submitOtaRelease" :disabled="otaLoading">
-                        [[ otaLoading ? '⏳ Đang upload & cập nhật OTA...' : '🚀 Tạo Release & Đẩy OTA sang Gitea + GitHub' ]]
-                    </button>
-                    <div v-if="otaResult" class="result-box" :class="otaResult.success ? 'success' : 'error'" style="margin-top:8px">
-                        <div v-if="otaResult.success">
-                            <div v-for="log in otaResult.logs" :key="log">[[ log ]]</div>
-                        </div>
-                        <div v-else>[[ otaResult.error ]]</div>
+                        <pre class="ota-prompt-pre">[[ otaAiPrompt ]]</pre>
                     </div>
                 </div>
 

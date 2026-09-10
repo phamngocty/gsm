@@ -450,3 +450,16 @@ body.resizing-sidebar .drag-handle-v { background: var(--accent); opacity: 0.5; 
 .conflict-alert-banner { animation: pulse 2s infinite ease-in-out; }
 @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.85; } }
 
+/* ─── OTA Guide & Prompt UI ─── */
+.ota-nav-tabs { display: flex; gap: 8px; margin-bottom: 14px; border-bottom: 1px solid var(--border); padding-bottom: 8px; }
+.ota-tab-btn { background: transparent; border: 1px solid transparent; color: var(--text-secondary); padding: 6px 14px; border-radius: var(--radius); cursor: pointer; font-size: 13px; font-weight: 500; transition: all 0.2s; }
+.ota-tab-btn:hover { background: var(--bg-hover); color: var(--text-primary); }
+.ota-tab-btn.active { background: var(--accent); color: #fff; font-weight: 600; box-shadow: 0 2px 8px rgba(99, 102, 241, 0.3); }
+
+.ota-snippet-card { background: var(--bg-primary); border: 1px solid var(--border); border-radius: var(--radius); padding: 12px 14px; margin-bottom: 14px; position: relative; }
+.ota-snippet-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; }
+.ota-snippet-header h5 { margin: 0; font-size: 13px; color: var(--text-primary); display: flex; align-items: center; gap: 6px; }
+.ota-code-pre { background: #12131c; color: #a9b1d6; border-radius: 6px; padding: 12px; font-size: 12px; font-family: 'JetBrains Mono', 'Fira Code', monospace; line-height: 1.5; overflow-x: auto; max-height: 280px; margin: 0; white-space: pre; border: 1px solid rgba(255,255,255,0.06); }
+.ota-prompt-pre { background: #181926; color: #cad3f5; border-radius: 6px; padding: 14px; font-size: 12.5px; font-family: 'JetBrains Mono', monospace; line-height: 1.6; overflow-y: auto; max-height: 380px; margin: 0; white-space: pre-wrap; border: 1px solid rgba(138, 180, 248, 0.2); }
+.ota-badge { display: inline-flex; align-items: center; justify-content: center; width: 20px; height: 20px; border-radius: 50%; background: var(--accent); color: #fff; font-size: 11px; font-weight: bold; }
+

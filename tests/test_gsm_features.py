@@ -185,6 +185,29 @@ class TestOtaDecoupling(unittest.TestCase):
         self.assertEqual(res.status_code, 200)
         self.assertEqual(res.mimetype, "application/zip")
 
+    @patch("app.load_projects")
+    def test_api_init_ota_template_endpoint(self, mock_load_projects):
+        import app
+        import tempfile
+        import shutil
+
+        temp_dir = tempfile.mkdtemp()
+        try:
+            mock_load_projects.return_value = [{"id": "p_temp", "name": "temp_proj", "path": temp_dir}]
+            client = app.app.test_client()
+            res = client.post("/api/projects/p_temp/init-ota-template")
+            self.assertEqual(res.status_code, 200)
+            data = res.get_json()
+            self.assertTrue(data.get("success"))
+            self.assertIn("version.json", data.get("created", []))
+            self.assertIn("OTA_GUIDE.md", data.get("created", []))
+
+            # Verify files actually exist on disk
+            self.assertTrue(os.path.exists(os.path.join(temp_dir, "version.json")))
+            self.assertTrue(os.path.exists(os.path.join(temp_dir, "OTA_GUIDE.md")))
+        finally:
+            shutil.rmtree(temp_dir, ignore_errors=True)
+
 
 class TestGitGraphAndTree(unittest.TestCase):
 
