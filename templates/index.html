@@ -250,13 +250,15 @@
             <div v-if="isGitRepo" class="action-bar">
                 <button class="abtn" @click="executePull" :disabled="syncing">⬇️ Kéo về</button>
                 <button class="abtn" @click="executePush" :disabled="syncing">⬆️ Đẩy lên</button>
-                <button class="abtn" @click="showCommitPanel = !showCommitPanel">💾 Lưu commit</button>
-                <button class="abtn" @click="showBranchPanel = !showBranchPanel">🌿 Quản lý nhánh</button>
+                <button class="abtn" @click="projectMainTab = 'changes'; showCommitPanel = true">💾 Lưu commit</button>
+                <button class="abtn" @click="projectMainTab = 'branches'; refreshBranches()">🌿 Quản lý nhánh</button>
                 <button class="abtn" @click="executeFetch" :disabled="syncing">📥 Lấy về</button>
                 <button class="abtn" @click="executeStashPush">📦 Cất giữ</button>
-                <button class="abtn" @click="showReleasesPanel = !showReleasesPanel; if (showReleasesPanel) { fetchReleases(); autoDetectOtaAssets(); }">🏷️ Releases & OTA</button>
+                <button class="abtn" @click="projectMainTab = 'releases'; fetchReleases(); autoDetectOtaAssets()">🏷️ Releases & OTA</button>
                 <button class="abtn abtn-danger" @click="showResetPanel = !showResetPanel">⏪ Khôi phục</button>
-                <span class="abtn-info">📝 [[ stagedCount ]] đã stage</span>
+                <span class="abtn-info" @click="projectMainTab = 'changes'" style="cursor:pointer;" title="Bấm để xem danh sách thay đổi">
+                    📝 [[ stagedCount ]] đã stage / [[ projectStatus.files ? projectStatus.files.length : 0 ]] thay đổi
+                </span>
             </div>
 
             <!-- Remote section -->
@@ -276,6 +278,25 @@
                     </div>
                     <div class="input-row"><input type="text" v-model="newRemoteUrl" class="form-input mono" placeholder="URL" style="flex:1"><input type="text" v-model="newRemoteName" class="form-input" placeholder="tên" style="width:70px"><button class="btn btn-secondary btn-sm" @click="addRemote">＋</button></div>
                 </div>
+            </div>
+
+            <!-- Main Project Navigation Tabs -->
+            <div v-if="isGitRepo" class="project-main-tabs">
+                <button class="pm-tab-btn" :class="{ active: projectMainTab === 'graph' }" @click="projectMainTab = 'graph'">
+                    🌳 Lịch Sử & Đồ Thị
+                </button>
+                <button class="pm-tab-btn" :class="{ active: projectMainTab === 'changes' }" @click="projectMainTab = 'changes'; if (projectStatus.files && projectStatus.files.length && !diffFile) viewDiff(projectStatus.files[0].path);">
+                    📝 Thay Đổi & Staging
+                    <span v-if="projectStatus.files && projectStatus.files.length" class="pm-badge">[[ projectStatus.files.length ]]</span>
+                    <span v-if="projectStatus.has_conflict" class="pm-badge-danger">⚠️ Xung đột</span>
+                </button>
+                <button class="pm-tab-btn" :class="{ active: projectMainTab === 'branches' }" @click="projectMainTab = 'branches'; refreshBranches();">
+                    🌿 Sơ Đồ Nhánh Trực Quan
+                    <span class="pm-badge">[[ branches.length ]]</span>
+                </button>
+                <button class="pm-tab-btn" :class="{ active: projectMainTab === 'releases' }" @click="projectMainTab = 'releases'; fetchReleases(); autoDetectOtaAssets();">
+                    🏷️ Releases & OTA
+                </button>
             </div>
 
             <!-- Result box -->
@@ -315,41 +336,153 @@
                 <textarea v-model="commitMessage" class="form-input commit-message-input" placeholder="Thông điệp commit..." rows="2"></textarea>
                 <textarea v-model="commitDescription" class="form-input" placeholder="Mô tả (optional)..." rows="2" style="margin-top:6px"></textarea>
                 <div class="commit-actions" style="margin-top:8px">
-                    <button class="btn btn-primary" @click="executeCommit" :disabled="!commitMessage.trim() || stagedCount === 0">💾 Commit</button>
-                    <button class="btn btn-secondary btn-sm" @click="stageAll">＋ Stage all</button>
+                    <button class="btn btn-primary" @click="executeCommit" :disabled="!commitMessage.trim() || stagingProgress.active || (projectStatus.files && projectStatus.files.length === 0)">
+                        💾 [[ stagedCount > 0 ? 'Commit (' + stagedCount + ')' : (projectStatus.files && projectStatus.files.length > 0 ? 'Stage & Commit' : 'Commit') ]]
+                    </button>
+                    <button class="btn btn-secondary btn-sm" @click="stageAll" :disabled="stagingProgress.active || (projectStatus.files && projectStatus.files.length === 0)">
+                        <span v-if="stagingProgress.active">⏳ Đang stage ([[ stagingProgress.percent ]]%)...</span>
+                        <span v-else>＋ Stage all</span>
+                    </button>
                     <label class="auto-push-label" title="Tự động đẩy lên remote sau khi commit" v-if="remotes.length > 0">
                         <input type="checkbox" v-model="autoPushAfterCommit"> ⬆️ Tự động push
                     </label>
                 </div>
-            </div>
 
-            <!-- Branch Panel -->
-            <div v-if="showBranchPanel" class="expand-panel">
-                <div class="expand-header"><h3>🌿 Nhánh</h3><button class="btn btn-close" @click="showBranchPanel = false">✖</button></div>
-                <div class="input-row" style="margin-bottom:8px">
-                    <input type="text" v-model="newBranchName" class="form-input" placeholder="Tên nhánh mới..." @keyup.enter="createBranch">
-                    <button class="btn btn-primary btn-sm" @click="createBranch">＋ Tạo</button>
-                </div>
-                <table class="file-table"><thead><tr><th>Nhánh</th><th width="200">Thao tác</th></tr></thead>
-                    <tbody><tr v-for="b in branches" :key="b.name">
-                        <td><span v-if="b.current" class="current-badge">⬅️</span> [[ b.name ]]<span v-if="b.remote" class="remote-badge">🌐</span></td>
-                        <td>
-                            <button class="btn btn-xs" @click="switchBranch(b.name)" :disabled="b.current">🔀 Chuyển</button>
-                            <button class="btn btn-xs" @click="deleteBranch(b.name)" :disabled="b.current || b.remote">🗑 Xóa</button>
-                            <button class="btn btn-xs" @click="mergeBranchInto(b.name)" :disabled="b.current || b.remote" title="Merge vào nhánh hiện tại">🔗 Merge</button>
-                            <button class="btn btn-xs" @click="rebaseBranch(b.name)" :disabled="b.current || b.remote" title="Rebase nhánh này lên nhánh hiện tại (⚠️ nguy hiểm)">🔃 Rebase</button>
-                        </td>
-                    </tr></tbody>
-                </table>
-                <div v-if="mergeSourceBranch" style="margin-top:8px;padding:8px;background:var(--bg-primary);border-radius:var(--radius)">
-                    <span>🔀 Merge <strong>[[ mergeSourceBranch ]]</strong> vào <strong>[[ projectStatus.branch ]]</strong></span>
-                    <button class="btn btn-primary btn-sm" style="margin-left:8px" @click="executeMerge" :disabled="merging">[[ merging ? '⏳...' : '🔀 Merge' ]]</button>
-                    <button class="btn btn-xs" @click="mergeSourceBranch = ''" style="margin-left:4px">✖ Hủy</button>
+                <!-- Thanh tiến trình phần trăm thời gian thực khi Stage All trong Commit Panel -->
+                <div v-if="stagingProgress.active" class="staging-progress-box" style="margin-top:8px;">
+                    <div style="display:flex; justify-content:space-between; align-items:center; font-size:11.5px; margin-bottom:4px;">
+                        <span style="font-weight:600; color:var(--text-primary);">⚡ Đang stage file: [[ stagingProgress.current ]] / [[ stagingProgress.total ]]</span>
+                        <span style="font-weight:700; color:var(--accent);">[[ stagingProgress.percent ]]%</span>
+                    </div>
+                    <div class="progress-bar-bg">
+                        <div class="progress-bar-fill" :style="{ width: stagingProgress.percent + '%' }"></div>
+                    </div>
+                    <div v-if="stagingProgress.file" class="staging-current-file">
+                        📄 [[ stagingProgress.file ]]
+                    </div>
                 </div>
             </div>
 
-            <!-- Releases Panel -->
-            <div v-if="showReleasesPanel" class="expand-panel">
+            <!-- TAB 3: Visual Branch Topology Diagram -->
+            <div v-if="projectMainTab === 'branches' || showBranchPanel" class="branch-diagram-container" style="margin-bottom:20px;">
+                <!-- Top Action & Search Bar -->
+                <div style="display:flex; justify-content:space-between; align-items:center; gap:12px; background:var(--bg-surface); padding:12px 16px; border-radius:var(--radius); border:1px solid var(--border); flex-wrap:wrap;">
+                    <div style="display:flex; align-items:center; gap:8px; flex:1; min-width:320px;">
+                        <input type="text" v-model="newBranchName" class="form-input" placeholder="Nhập tên nhánh mới..." @keyup.enter="createBranch" style="flex:1;">
+                        <select v-model="branchCreateFrom" class="form-input" style="width:180px;">
+                            <option value="">Tạo từ HEAD ([[ projectStatus.branch ]])</option>
+                            <option v-for="b in branches" :key="b.name" :value="b.name">Tạo từ: [[ b.name ]]</option>
+                        </select>
+                        <button class="btn btn-primary" @click="createBranch" :disabled="!newBranchName.trim()">🌿 Tạo Nhánh</button>
+                    </div>
+                    <div style="display:flex; align-items:center; gap:8px;">
+                        <input type="text" v-model="branchSearchQuery" class="form-input form-input-sm" placeholder="🔍 Tìm nhánh..." style="width:160px;">
+                        <button class="btn btn-secondary btn-sm" @click="refreshBranches">🔄</button>
+                        <button v-if="showBranchPanel" class="btn btn-close" @click="showBranchPanel = false">✖</button>
+                    </div>
+                </div>
+
+                <!-- Active Branch Hero Card -->
+                <div v-if="currentBranchObj" class="branch-hero-card">
+                    <div style="display:flex; justify-content:space-between; align-items:flex-start; flex-wrap:wrap; gap:12px;">
+                        <div>
+                            <div class="branch-hero-title">
+                                <span>🌿 [[ currentBranchObj.name ]]</span>
+                                <span class="branch-hero-badge">🟢 ĐANG CHỌN (HEAD)</span>
+                            </div>
+                            <div style="font-size:13px; color:var(--text-secondary); margin-bottom:4px;">
+                                <span class="mono" style="color:var(--accent); font-weight:bold;">[[ currentBranchObj.hash ]]</span>: [[ currentBranchObj.subject || 'Commit mới nhất' ]]
+                            </div>
+                            <div style="font-size:11.5px; color:var(--text-muted);">
+                                👤 Cập nhật trên nhánh <strong>[[ currentBranchObj.name ]]</strong> &bull; 🕐 [[ currentBranchObj.date || 'Gần đây' ]]
+                            </div>
+                        </div>
+                        <div style="display:flex; align-items:center; gap:8px;">
+                            <span class="branch-sync-pill" :class="currentBranchObj.track ? (currentBranchObj.track.includes('ahead') ? 'branch-sync-ahead' : 'branch-sync-behind') : (currentBranchObj.upstream ? 'branch-sync-synced' : 'branch-sync-none')">
+                                [[ currentBranchObj.track ? (currentBranchObj.track.includes('ahead') ? '⬆️ ' + currentBranchObj.track : '⬇️ ' + currentBranchObj.track) : (currentBranchObj.upstream ? '✅ Đã đồng bộ (' + currentBranchObj.upstream + ')' : 'Chưa gắn remote') ]]
+                            </span>
+                            <button class="btn btn-secondary btn-sm" @click="executePull" :disabled="syncing">⬇️ Pull</button>
+                            <button class="btn btn-primary btn-sm" @click="executePush" :disabled="syncing">⬆️ Push</button>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Merge In Progress Banner -->
+                <div v-if="mergeSourceBranch" style="padding:10px 14px; background:rgba(99, 102, 241, 0.15); border:1px solid var(--accent); border-radius:var(--radius); display:flex; justify-content:space-between; align-items:center;">
+                    <span>🔀 Chuẩn bị Merge nhánh <strong>[[ mergeSourceBranch ]]</strong> vào nhánh đang chọn <strong>[[ projectStatus.branch ]]</strong></span>
+                    <div style="display:flex; gap:6px;">
+                        <button class="btn btn-primary btn-sm" @click="executeMerge" :disabled="merging">[[ merging ? '⏳ Đang merge...' : '🔀 Xác Nhận Merge' ]]</button>
+                        <button class="btn btn-secondary btn-sm" @click="mergeSourceBranch = ''">✖ Hủy</button>
+                    </div>
+                </div>
+
+                <!-- 2-Column Branch Diagram (Local vs Remote) -->
+                <div class="branch-columns-grid">
+                    <!-- Col 1: Local Branches -->
+                    <div class="branch-col-card">
+                        <div class="branch-col-header">
+                            <span>🌿 Nhánh Cục Bộ (Local Branches)</span>
+                            <span class="pm-badge">[[ localBranches.length ]]</span>
+                        </div>
+                        <div v-if="localBranches.length === 0" class="status-clean">Không tìm thấy nhánh local nào</div>
+                        <div v-for="b in localBranches" :key="b.name" class="branch-card-item" :class="{ 'is-current': b.current }">
+                            <div class="branch-card-title">
+                                <span class="branch-card-name">
+                                    <span v-if="b.current">🟢</span>
+                                    <span v-else>🌿</span>
+                                    [[ b.name ]]
+                                    <span v-if="b.current" style="font-size:10px; color:#22c55e; font-weight:bold;">[HEAD]</span>
+                                </span>
+                                <span class="branch-sync-pill" :class="b.track ? (b.track.includes('ahead') ? 'branch-sync-ahead' : 'branch-sync-behind') : (b.upstream ? 'branch-sync-synced' : 'branch-sync-none')">
+                                    [[ b.track ? (b.track.includes('ahead') ? '⬆️ ' + b.track : '⬇️ ' + b.track) : (b.upstream ? '✅ ' + b.upstream : 'local-only') ]]
+                                </span>
+                            </div>
+                            <div class="branch-card-subject" v-if="b.subject">
+                                <span class="mono" style="color:var(--accent);">[[ b.hash ]]</span> [[ b.subject ]]
+                            </div>
+                            <div class="branch-card-meta" style="display:flex; justify-content:space-between; align-items:center; margin-top:6px;">
+                                <span>🕐 [[ b.date || 'Chưa rõ' ]]</span>
+                                <div style="display:flex; gap:4px;">
+                                    <button v-if="!b.current" class="btn btn-xs btn-primary" @click="switchBranch(b.name)" title="Chuyển sang nhánh này">🔀 Checkout</button>
+                                    <button v-if="!b.current" class="btn btn-xs btn-secondary" @click="mergeBranchInto(b.name)" title="Merge nhánh này vào nhánh đang chọn">🔗 Merge</button>
+                                    <button class="btn btn-xs btn-secondary" @click="promptCreateBranchFromCommit(b.hash || b.name)" title="Tạo nhánh con từ commit của nhánh này">➕ Con</button>
+                                    <button v-if="!b.current" class="btn btn-xs btn-danger" @click="deleteBranch(b.name)" title="Xóa nhánh">🗑</button>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Col 2: Remote Branches -->
+                    <div class="branch-col-card">
+                        <div class="branch-col-header">
+                            <span>☁️ Nhánh Máy Chủ (Remote Branches)</span>
+                            <span class="pm-badge">[[ remoteBranches.length ]]</span>
+                        </div>
+                        <div v-if="remoteBranches.length === 0" class="status-clean">Không có nhánh remote nào hoặc chưa fetch</div>
+                        <div v-for="b in remoteBranches" :key="b.name" class="branch-card-item">
+                            <div class="branch-card-title">
+                                <span class="branch-card-name">
+                                    <span>☁️</span> [[ b.name ]]
+                                </span>
+                                <span class="branch-sync-pill branch-sync-synced">Remote</span>
+                            </div>
+                            <div class="branch-card-subject" v-if="b.subject">
+                                <span class="mono" style="color:var(--accent);">[[ b.hash ]]</span> [[ b.subject ]]
+                            </div>
+                            <div class="branch-card-meta" style="display:flex; justify-content:space-between; align-items:center; margin-top:6px;">
+                                <span>🕐 [[ b.date || 'Chưa rõ' ]]</span>
+                                <div style="display:flex; gap:4px;">
+                                    <button class="btn btn-xs btn-secondary" @click="switchBranch(b.name)" title="Checkout nhánh remote này về local">📥 Checkout</button>
+                                    <button class="btn btn-xs btn-secondary" @click="mergeBranchInto(b.name)" title="Merge nhánh remote này vào nhánh hiện tại">🔗 Merge vào [[ projectStatus.branch ]]</button>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- TAB 4: Releases Panel -->
+            <div v-if="showReleasesPanel || projectMainTab === 'releases'" class="expand-panel">
                 <div class="expand-header">
                     <div style="display:flex;align-items:center;gap:12px">
                         <h3>🏷️ Releases & Phiên bản</h3>
@@ -451,29 +584,68 @@
                             </div>
                         </div>
                         <div class="form-group">
-                            <label>Đường dẫn File Firmware ESP32 GC9A01 / Tròn (.bin)</label>
+                            <label>Đường dẫn File Firmware ESP32 (.bin) (Bất kỳ file .bin nào)</label>
                             <div class="input-row">
                                 <input type="text" v-model="otaBinPath" class="form-input mono" placeholder="C:\...\firmware.bin">
-                                <button class="btn btn-secondary btn-sm" @click="browseOtaFile('bin')">📁 Duyệt GC9A01...</button>
+                                <button class="btn btn-secondary btn-sm" @click="browseOtaFile('bin')">📁 Duyệt File .bin...</button>
                             </div>
                         </div>
                         <div class="form-group">
-                            <label>Đường dẫn File Firmware ESP32 OLED (.bin)</label>
+                            <label>Đường dẫn File Firmware ESP32 Phụ (.bin) (Tùy chọn: OLED / Màn hình phụ / Mở rộng)</label>
                             <div class="input-row">
-                                <input type="text" v-model="otaOledBinPath" class="form-input mono" placeholder="C:\...\firmware.bin">
-                                <button class="btn btn-secondary btn-sm" @click="browseOtaFile('oled_bin')">📁 Duyệt OLED...</button>
+                                <input type="text" v-model="otaOledBinPath" class="form-input mono" placeholder="C:\...\firmware_phu.bin (tùy chọn)">
+                                <button class="btn btn-secondary btn-sm" @click="browseOtaFile('oled_bin')">📁 Duyệt File .bin phụ...</button>
                             </div>
                         </div>
+
+                        <!-- Danh sách các File phát hành bổ sung khác (Tùy chọn không giới hạn) -->
+                        <div class="form-group" style="background:rgba(255,255,255,0.02);border:1px dashed var(--border);border-radius:8px;padding:12px 14px;margin-bottom:14px">
+                            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
+                                <label style="margin-bottom:0;font-weight:600">📁 File Phát Hành Mở Rộng Bổ Sung (Không giới hạn số lượng / định dạng)</label>
+                                <button class="btn btn-secondary btn-xs" @click="addExtraOtaFile">＋ Thêm File Khác</button>
+                            </div>
+                            <div v-if="otaExtraFiles.length === 0" style="font-size:11.5px;color:var(--text-muted)">
+                                💡 Nhấn <strong>"＋ Thêm File Khác"</strong> để đính kèm thêm bất kỳ file nào (firmware phụ khác, filesystem SPIFFS/LittleFS .bin, file cấu hình, tài liệu PDF, bootloader...).
+                            </div>
+                            <div v-for="(item, idx) in otaExtraFiles" :key="idx" style="margin-bottom:8px;display:flex;gap:6px;align-items:center">
+                                <input type="text" v-model="item.label" class="form-input" style="width:130px;font-size:11.5px" placeholder="Mô tả / Nhãn (vd: LittleFS)">
+                                <input type="text" v-model="item.path" class="form-input mono" style="flex:1;font-size:11.5px" placeholder="Đường dẫn file...">
+                                <button class="btn btn-secondary btn-xs" @click="browseExtraOtaFile(idx)" title="Chọn file">📁</button>
+                                <button class="btn btn-danger btn-xs" @click="removeExtraOtaFile(idx)" title="Xoá mục này">✖</button>
+                            </div>
+                        </div>
+
+                        <div class="form-group">
+                            <label>URL Repository OTA (Public) — Kiến trúc 2 Repo</label>
+                            <div class="input-row">
+                                <input type="text" v-model="otaPublicRepoUrl" class="form-input mono" placeholder="https://github.com/user/project-ota.git (Tùy chọn: Repo phát hành công khai)">
+                            </div>
+                            <span class="help-text" style="font-size:11px;color:var(--text-muted)">
+                                💡 Nhập URL này để cách ly vật lý 2 Repo: Tài nguyên Web HTML và version.json sẽ được push vào /docs của Repo 2, còn tất cả file .bin/.apk và file mở rộng sẽ upload vào Release Assets của Repo 2. Repo nguồn (Repo 1) giữ riêng tư.
+                            </span>
+                        </div>
+
                         <div class="form-group">
                             <label>Nội dung cập nhật (Changelog)</label>
                             <textarea v-model="otaChangelog" class="form-input" rows="2" placeholder="Ghi chú nâng cấp..."></textarea>
                         </div>
+
+                        <!-- Tùy chọn tác vụ phát hành nâng cao -->
+                        <div class="ota-options-bar">
+                            <label class="checkbox-label" title="Tự động gọi gradlew.bat assembleDebug để build APK mang versionCode/versionName mới">
+                                <input type="checkbox" v-model="otaAutoBuildApk"> 🔨 Tự Động Build Lại APK
+                            </label>
+                            <label class="checkbox-label" title="Tự động đồng bộ file nhị phân OTA và version.json sang máy chủ NAS qua SSH/SFTP">
+                                <input type="checkbox" v-model="otaSyncNas"> 📡 Đồng Bộ Sang Trạm NAS Fusion
+                            </label>
+                        </div>
+
                         <button class="btn btn-primary btn-full" @click="submitOtaRelease" :disabled="otaLoading">
-                            [[ otaLoading ? '⏳ Đang upload & cập nhật OTA...' : '🚀 Tạo Release & Đẩy OTA sang Gitea + GitHub' ]]
+                            [[ otaLoading ? '⏳ Đang upload & xử lý phát hành OTA...' : (otaPublicRepoUrl && otaPublicRepoUrl.trim() ? '🚀 Tạo Release & Đẩy OTA sang Repo 2 (Public)' : '🚀 Tạo Release & Đẩy OTA sang Gitea + GitHub') ]]
                         </button>
                         <div v-if="otaResult" class="result-box" :class="otaResult.success ? 'success' : 'error'" style="margin-top:8px">
                             <div v-if="otaResult.success">
-                                <div v-for="log in otaResult.logs" :key="log">[[ log ]]</div>
+                                <div class="ota-log-item" v-for="log in otaResult.logs" :key="log">[[ log ]]</div>
                             </div>
                             <div v-else>[[ otaResult.error ]]</div>
                         </div>
@@ -489,7 +661,9 @@
                         <div class="ota-snippet-card">
                             <div class="ota-snippet-header">
                                 <h5><span class="ota-badge">1</span> File Cấu Hình Phiên Bản (version.json)</h5>
-                                <button class="btn btn-secondary btn-xs" @click="copyOtaSnippet(otaVersionJsonSample, 'cấu trúc version.json')">📋 Sao chép version.json</button>
+                                <button class="btn btn-secondary btn-xs" @click="copyOtaSnippet(otaVersionJsonSample, 'cấu trúc version.json')">
+                                    [[ copiedTarget === 'cấu trúc version.json' ? '✅ Đã sao chép!' : '📋 Sao chép version.json' ]]
+                                </button>
                             </div>
                             <pre class="ota-code-pre">[[ otaVersionJsonSample ]]</pre>
                         </div>
@@ -498,7 +672,9 @@
                         <div class="ota-snippet-card">
                             <div class="ota-snippet-header">
                                 <h5><span class="ota-badge">2</span> Code Mẫu ESP32 C++: Nạp OTA Qua WiFi (HTTPUpdate.h)</h5>
-                                <button class="btn btn-secondary btn-xs" @click="copyOtaSnippet(otaEsp32WifiCode, 'code C++ WiFi OTA')">📋 Sao chép C++ WiFi OTA</button>
+                                <button class="btn btn-secondary btn-xs" @click="copyOtaSnippet(otaEsp32WifiCode, 'code C++ WiFi OTA')">
+                                    [[ copiedTarget === 'code C++ WiFi OTA' ? '✅ Đã sao chép!' : '📋 Sao chép C++ WiFi OTA' ]]
+                                </button>
                             </div>
                             <pre class="ota-code-pre">[[ otaEsp32WifiCode ]]</pre>
                         </div>
@@ -507,7 +683,9 @@
                         <div class="ota-snippet-card">
                             <div class="ota-snippet-header">
                                 <h5><span class="ota-badge">3</span> Code Mẫu ESP32 C++: Nạp OTA Qua Bluetooth BLE (Update.h)</h5>
-                                <button class="btn btn-secondary btn-xs" @click="copyOtaSnippet(otaEsp32BleCode, 'code C++ BLE OTA')">📋 Sao chép C++ BLE OTA</button>
+                                <button class="btn btn-secondary btn-xs" @click="copyOtaSnippet(otaEsp32BleCode, 'code C++ BLE OTA')">
+                                    [[ copiedTarget === 'code C++ BLE OTA' ? '✅ Đã sao chép!' : '📋 Sao chép C++ BLE OTA' ]]
+                                </button>
                             </div>
                             <pre class="ota-code-pre">[[ otaEsp32BleCode ]]</pre>
                         </div>
@@ -516,7 +694,9 @@
                         <div class="ota-snippet-card">
                             <div class="ota-snippet-header">
                                 <h5><span class="ota-badge">4</span> Code Mẫu Android Kotlin: Tự Động Kiểm Tra & Tải Cập Nhật APK</h5>
-                                <button class="btn btn-secondary btn-xs" @click="copyOtaSnippet(otaAndroidCode, 'code Kotlin Android')">📋 Sao chép Kotlin UpdateManager</button>
+                                <button class="btn btn-secondary btn-xs" @click="copyOtaSnippet(otaAndroidCode, 'code Kotlin Android')">
+                                    [[ copiedTarget === 'code Kotlin Android' ? '✅ Đã sao chép!' : '📋 Sao chép Kotlin UpdateManager' ]]
+                                </button>
                             </div>
                             <pre class="ota-code-pre">[[ otaAndroidCode ]]</pre>
                         </div>
@@ -529,7 +709,7 @@
                                 📋 Sao chép toàn bộ Prompt dưới đây và dán vào AI (ChatGPT / Claude / Gemini / Antigravity) để AI tự động tạo trọn gói tính năng OTA cho dự án mới của bạn:
                             </span>
                             <button class="btn btn-primary btn-sm" @click="copyOtaSnippet(otaAiPrompt, 'toàn bộ Prompt cho AI')">
-                                📋 Sao Chép Toàn Bộ Prompt
+                                [[ copiedTarget === 'toàn bộ Prompt cho AI' ? '✅ Đã sao chép toàn bộ!' : '📋 Sao Chép Toàn Bộ Prompt' ]]
                             </button>
                         </div>
                         <pre class="ota-prompt-pre">[[ otaAiPrompt ]]</pre>
@@ -622,8 +802,152 @@
                 </div>
             </div>
 
-            <!-- GitKraken-style: File Tree + Graph + Changes -->
-            <div v-if="isGitRepo" class="repo-content">
+            <!-- TAB 2: Changes & Staging 2-Column Split View (GitKraken / GitHub Desktop Style) -->
+            <div v-if="isGitRepo && projectMainTab === 'changes'" class="changes-split-layout">
+                <!-- Left Column (380px): Modified Files List + Quick Commit Box -->
+                <div class="changes-list-pane">
+                    <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px;">
+                        <h3 style="margin:0; font-size:15px; display:flex; align-items:center; gap:6px;">
+                            <span>📝</span> Thay Đổi
+                            <span class="pm-badge">[[ (projectStatus.files || []).length ]]</span>
+                        </h3>
+                        <div style="display:flex; gap:4px;">
+                            <button class="btn btn-xs btn-primary" @click="stageAll" :disabled="stagingProgress.active || (projectStatus.files && projectStatus.files.length === 0)" title="Stage tất cả các file">
+                                <span v-if="stagingProgress.active">⏳ [[ stagingProgress.percent ]]%</span>
+                                <span v-else>＋ Tất cả</span>
+                            </button>
+                            <button class="btn btn-xs" @click="unstageAll" :disabled="stagingProgress.active || stagedCount === 0" title="Bỏ stage">－ Bỏ</button>
+                            <button class="btn btn-xs btn-secondary" @click="refreshStatus" title="Tải lại">🔄</button>
+                        </div>
+                    </div>
+
+                    <!-- Thanh trạng thái phần trăm thời gian thực khi Stage All -->
+                    <div v-if="stagingProgress.active" class="staging-progress-card">
+                        <div style="display:flex; justify-content:space-between; align-items:center; font-size:12px; margin-bottom:5px;">
+                            <span style="font-weight:600; color:var(--text-primary); display:flex; align-items:center; gap:6px;">
+                                <span class="spinner-inline"></span> ⚡ Đang Stage Tất Cả...
+                            </span>
+                            <span style="font-weight:700; color:var(--accent);">[[ stagingProgress.percent ]]% ([[ stagingProgress.current ]] / [[ stagingProgress.total ]])</span>
+                        </div>
+                        <div class="progress-bar-bg">
+                            <div class="progress-bar-fill" :style="{ width: stagingProgress.percent + '%' }"></div>
+                        </div>
+                        <div v-if="stagingProgress.file" class="staging-current-file">
+                            📄 [[ stagingProgress.file ]]
+                        </div>
+                    </div>
+
+                    <!-- Conflict alert banner -->
+                    <div v-if="projectStatus.has_conflict" class="conflict-alert-banner" style="background:rgba(248,113,113,0.15); border:1px solid var(--red); border-radius:var(--radius); padding:8px 10px; margin-bottom:10px;">
+                        <div style="display:flex; align-items:center; gap:6px;">
+                            <span>⚠️</span>
+                            <strong style="color:var(--red); font-size:12px;">Phát hiện xung đột (Conflict)!</strong>
+                        </div>
+                        <div style="font-size:11px; color:var(--text-secondary); margin-top:2px;">Bấm nút ⚡ tại file để giải quyết xung đột.</div>
+                    </div>
+
+                    <!-- Changed files list -->
+                    <div v-if="projectStatus.files && projectStatus.files.length > 0" style="max-height:380px; overflow-y:auto; margin-bottom:12px; border:1px solid var(--border); border-radius:6px; background:var(--bg-primary); padding:4px;">
+                        <div v-for="file in projectStatus.files" :key="file.path"
+                             class="changes-file-row"
+                             :class="{ selected: diffFile === file.path }"
+                             @click="viewDiff(file.path)">
+                            <input type="checkbox" :checked="isStaged(file.status)" @click.stop @change="toggleStage(file)" title="Stage / Bỏ stage file này">
+                            <span class="changes-file-name" :title="file.path">[[ file.path ]]</span>
+                            <span class="status-badge" :class="'badge-' + file.status.toLowerCase()" style="font-size:10px; padding:2px 6px;">[[ file.status ]]</span>
+                            <div style="display:flex; gap:2px;" @click.stop>
+                                <button v-if="file.status === 'Conflict'" class="btn btn-xs btn-danger" @click="openConflictResolver(file.path)" title="Giải quyết xung đột" style="padding:1px 5px; font-size:10px;">⚡</button>
+                                <button class="btn btn-xs" @click="openFileInExplorer(file.path)" title="Mở file trên máy" style="padding:1px 5px; font-size:10px;">📂</button>
+                                <button class="btn btn-xs" @click="blameFile(file.path)" title="Blame file" style="padding:1px 5px; font-size:10px;">🔍</button>
+                            </div>
+                        </div>
+                    </div>
+                    <div v-else class="status-clean" style="margin-bottom:12px; padding:24px 10px; text-align:center;">
+                        ✅ Thư mục làm việc sạch (Không có file thay đổi)
+                    </div>
+
+                    <!-- Quick Commit Card embedded in Left Column -->
+                    <div style="background:var(--bg-secondary); border:1px solid var(--border); border-radius:6px; padding:10px;">
+                        <div style="font-size:12px; font-weight:600; margin-bottom:6px; display:flex; justify-content:space-between; align-items:center;">
+                            <span>💾 Commit Nhanh</span>
+                            <span style="font-size:11px; color:var(--text-muted);">Đã stage: [[ stagedCount ]] files</span>
+                        </div>
+                        <div style="display:flex; gap:3px; margin-bottom:6px; flex-wrap:wrap;">
+                            <button class="btn btn-xs btn-secondary" @click="setCommitPreset('feat')" style="font-size:10px; padding:2px 5px;">✨ feat</button>
+                            <button class="btn btn-xs btn-secondary" @click="setCommitPreset('fix')" style="font-size:10px; padding:2px 5px;">🐛 fix</button>
+                            <button class="btn btn-xs btn-secondary" @click="setCommitPreset('update')" style="font-size:10px; padding:2px 5px;">📝 update</button>
+                            <button class="btn btn-xs btn-secondary" @click="setCommitPreset('chore')" style="font-size:10px; padding:2px 5px;">🔧 chore</button>
+                        </div>
+                        <input type="text" v-model="commitMessage" class="form-input form-input-sm" placeholder="Thông điệp commit..." style="width:100%; margin-bottom:6px; box-sizing:border-box;">
+                        <textarea v-model="commitDescription" class="form-input form-input-sm" placeholder="Mô tả chi tiết (tùy chọn)..." rows="2" style="width:100%; margin-bottom:6px; box-sizing:border-box; font-size:11px;"></textarea>
+                        <div style="display:flex; justify-content:space-between; align-items:center;">
+                            <label style="font-size:11px; display:flex; align-items:center; gap:4px; color:var(--text-secondary); cursor:pointer;">
+                                <input type="checkbox" v-model="autoPushAfterCommit"> ⬆️ Tự động push
+                            </label>
+                            <button class="btn btn-primary btn-sm" @click="executeCommit" :disabled="!commitMessage.trim() || stagingProgress.active || (projectStatus.files && projectStatus.files.length === 0)">
+                                💾 [[ stagedCount > 0 ? 'Commit (' + stagedCount + ')' : (projectStatus.files && projectStatus.files.length > 0 ? 'Stage & Commit' : 'Commit') ]]
+                            </button>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Right Column (flex: 1): Real-time Visual Diff Viewer & Conflict Resolver -->
+                <div class="changes-diff-pane">
+                    <!-- Diff Header -->
+                    <div v-if="diffFile" style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px; border-bottom:1px solid var(--border); padding-bottom:8px;">
+                        <div style="display:flex; align-items:center; gap:8px; overflow:hidden;">
+                            <span style="font-size:16px;">📄</span>
+                            <strong class="mono" style="font-size:13px; color:var(--accent); text-overflow:ellipsis; overflow:hidden; white-space:nowrap;">[[ diffFile ]]</strong>
+                        </div>
+                        <div style="display:flex; gap:6px; flex-shrink:0;">
+                            <button class="btn btn-xs btn-secondary" @click="openFileInExplorer(diffFile)">📂 Mở file</button>
+                            <button class="btn btn-xs btn-secondary" @click="blameFile(diffFile)">🔍 Blame</button>
+                        </div>
+                    </div>
+
+                    <!-- Conflict Resolver if active file is in conflict -->
+                    <div v-if="activeConflictFile" class="conflict-resolver-card" style="margin-bottom:12px; border:1px solid var(--red); border-radius:6px; padding:10px; background:rgba(239,68,68,0.06);">
+                        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:6px;">
+                            <strong style="color:var(--red); font-size:12.5px;">⚡ Phân xử xung đột cho: [[ activeConflictFile ]]</strong>
+                            <button class="btn btn-close" @click="activeConflictFile = ''">✖</button>
+                        </div>
+                        <div style="display:flex; gap:6px; flex-wrap:wrap; margin-bottom:8px;">
+                            <button class="btn btn-xs btn-primary" @click="resolveConflict(activeConflictFile, 'ours')">👈 Giữ code của tôi (Ours)</button>
+                            <button class="btn btn-xs btn-warning" @click="resolveConflict(activeConflictFile, 'theirs')">👉 Lấy code remote (Theirs)</button>
+                            <button class="btn btn-xs btn-success" @click="resolveConflict(activeConflictFile, 'mark_resolved')">✅ Đã sửa xong (Mark Resolved)</button>
+                            <button class="btn btn-xs btn-secondary" @click="openFileInExplorer(activeConflictFile)">📂 Mở trình soạn thảo</button>
+                        </div>
+                    </div>
+
+                    <!-- Visual Line-by-line Diff -->
+                    <div v-if="diffFile">
+                        <div v-if="parsedDiff && parsedDiff.length > 0" style="max-height:580px; overflow-y:auto; background:var(--bg-primary); font-family:var(--mono); font-size:12px; border:1px solid var(--border); border-radius:6px;">
+                            <div v-for="df in parsedDiff" :key="df.file">
+                                <div v-for="(h, hi) in df.hunks" :key="hi">
+                                    <div style="color:var(--text-muted); background:rgba(255,255,255,0.04); padding:4px 12px; font-size:11px; border-top:1px solid rgba(255,255,255,0.06); border-bottom:1px solid rgba(255,255,255,0.06);">[[ h.header ]]</div>
+                                    <div v-for="(line, li) in h.lines" :key="li"
+                                         :class="{'diff-line-add': line.type === 'add', 'diff-line-del': line.type === 'del'}"
+                                         style="display:flex; padding:1px 12px; line-height:1.5;">
+                                        <span style="width:36px; color:var(--text-muted); user-select:none; flex-shrink:0;">[[ line.old_lineno || '' ]]</span>
+                                        <span style="width:36px; color:var(--text-muted); user-select:none; flex-shrink:0;">[[ line.new_lineno || '' ]]</span>
+                                        <span style="white-space:pre-wrap; word-break:break-all;">[[ line.text ]]</span>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                        <pre v-else-if="diffContent" class="diff-content" style="margin:0; padding:12px; max-height:580px; overflow-y:auto; border:1px solid var(--border); border-radius:6px;">[[ diffContent ]]</pre>
+                        <div v-else class="status-clean" style="padding:40px; text-align:center;">
+                            ⏳ Đang nạp nội dung so sánh hoặc không có sự khác biệt...
+                        </div>
+                    </div>
+                    <div v-else class="status-clean" style="padding:60px 20px; text-align:center; color:var(--text-muted);">
+                        👈 Chọn một file ở danh sách bên trái để xem chi tiết từng dòng thay đổi (Diff trực quan)
+                    </div>
+                </div>
+            </div>
+
+            <!-- TAB 1: GitKraken-style: File Tree + Commit Graph -->
+            <div v-if="isGitRepo && (projectMainTab === 'graph' || !projectMainTab)" class="repo-content">
                 <!-- File tree sidebar -->
                 <div class="file-tree-panel" :style="{ width: treeWidth + 'px' }">
                     <div class="file-tree-header" style="flex-direction:column; align-items:stretch; gap:6px;">
@@ -798,39 +1122,19 @@
                             </div>
                         </div>
 
-                        <!-- Changes -->
-                        <div class="section-header" style="margin-top:12px"><h3>📊 Thay đổi</h3><button class="btn btn-secondary btn-sm" @click="refreshStatus">🔄</button></div>
-                        <div v-if="projectStatus.has_conflict" class="conflict-alert-banner" style="background:rgba(248,113,113,0.12); border:1px solid var(--red); border-radius:var(--radius); padding:8px 12px; margin-bottom:8px; display:flex; align-items:center; justify-content:space-between;">
+                        <!-- Changes Banner (Chuyển sang Tab Thay Đổi & Staging riêng biệt) -->
+                        <div v-if="projectStatus.files && projectStatus.files.length > 0" style="margin-top:14px; padding:10px 14px; background:rgba(99, 102, 241, 0.08); border:1px solid rgba(99, 102, 241, 0.25); border-radius:var(--radius); display:flex; justify-content:space-between; align-items:center;">
                             <div style="display:flex; align-items:center; gap:8px;">
-                                <span style="font-size:18px;">⚠️</span>
-                                <div>
-                                    <strong style="color:var(--red); font-size:13px;">Phát hiện xung đột (Merge Conflict)!</strong>
-                                    <div style="font-size:11px; color:var(--text-secondary);">Nhấn nút "⚡ Xử lý" tại file bị xung đột để chọn giữ code local hay server.</div>
-                                </div>
+                                <span style="font-size:16px;">📝</span>
+                                <span style="font-size:13px; color:var(--text-primary);">
+                                    Có <strong>[[ projectStatus.files.length ]]</strong> file đang thay đổi chưa commit
+                                </span>
+                                <span v-if="projectStatus.has_conflict" style="color:var(--red); font-weight:bold; font-size:12px; margin-left:6px;">⚠️ Có xung đột!</span>
                             </div>
+                            <button class="btn btn-primary btn-sm" @click="projectMainTab = 'changes'; if (!diffFile && projectStatus.files.length) viewDiff(projectStatus.files[0].path);">
+                                📝 Mở Tab Thay Đổi & Staging ➔
+                            </button>
                         </div>
-                        <div v-if="projectStatus.files && projectStatus.files.length > 0">
-                            <div style="display:flex;gap:6px;margin-bottom:6px">
-                                <button class="btn btn-xs btn-primary" @click="stageAll">＋ Stage tất cả</button>
-                                <button class="btn btn-xs" @click="unstageAll">－ Bỏ stage</button>
-                                <button class="btn btn-xs" @click="refreshStatus">🔄</button>
-                            </div>
-                            <table class="file-table"><thead><tr><th width="30"></th><th>File</th><th>Trạng thái</th><th width="100"></th></tr></thead>
-                                <tbody><tr v-for="file in projectStatus.files" :key="file.path" :class="statusRowClass(file.status)"
-                                    @click.right.prevent="showContextMenu($event, file)">
-                                    <td><input type="checkbox" :checked="isStaged(file.status)" @change="toggleStage(file)"></td>
-                                    <td class="file-path">[[ file.path ]]</td>
-                                    <td><span class="status-badge" :class="'badge-' + file.status.toLowerCase()">[[ file.status ]]</span></td>
-                                    <td>
-                                        <button v-if="file.status === 'Conflict'" class="btn btn-xs btn-danger" @click="openConflictResolver(file.path)" title="Xử lý xung đột" style="margin-right:2px;">⚡ Xử lý</button>
-                                        <button class="btn btn-xs" @click="viewDiff(file.path)" title="Xem diff">📄</button>
-                                        <button class="btn btn-xs" @click="openFileInExplorer(file.path)" title="Mở file">📂</button>
-                                        <button class="btn btn-xs" @click="blameFile(file.path)" title="Blame file">🔍</button>
-                                    </td>
-                                </tr></tbody>
-                            </table>
-                        </div>
-                        <div v-else class="status-clean">✅ Không có file thay đổi</div>
                     </div>
 
                     <!-- Conflict Resolver Modal / Card -->

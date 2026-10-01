@@ -2,6 +2,7 @@ import unittest
 from unittest.mock import patch, MagicMock
 import sys
 import os
+import json
 
 # Add parent directory to sys.path
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
@@ -208,6 +209,127 @@ class TestOtaDecoupling(unittest.TestCase):
         finally:
             shutil.rmtree(temp_dir, ignore_errors=True)
 
+    @patch("app.sync_version_to_nas")
+    @patch("app.upload_gitea_asset")
+    @patch("app.create_gitea_release")
+    @patch("app.load_settings")
+    @patch("app.get_token")
+    @patch("app.load_projects")
+    def test_api_ota_release_options_and_auto_detection(self, mock_load, mock_get_token, mock_settings, mock_create_rel, mock_upload_asset, mock_sync_nas):
+        import app
+        import tempfile
+        import shutil
+        import json
+
+        temp_dir = tempfile.mkdtemp()
+        try:
+            mock_load.return_value = [{
+                "id": "p_ota_test",
+                "name": "ota_test",
+                "path": temp_dir,
+                "gitea_remote": "http://192.168.1.114:3002/nas152/ota_test.git"
+            }]
+            mock_get_token.return_value = "fake_tok"
+            mock_settings.return_value = {"gitea_server": "http://192.168.1.114:3002"}
+            mock_create_rel.return_value = {"id": 101}
+            mock_upload_asset.return_value = ({"browser_download_url": "http://download/test.bin"}, None)
+            mock_sync_nas.return_value = True
+
+            client = app.app.test_client()
+            res = client.post("/api/projects/p_ota_test/ota-release", json={
+                "tag_name": "v1.0.2",
+                "changelog": "Test update",
+                "app_version_code": 2,
+                "fw_version_code": 2,
+                "sync_nas": False,
+                "build_apk": False
+            })
+            self.assertEqual(res.status_code, 200)
+            data = res.get_json()
+            self.assertTrue(data.get("success"))
+            # When sync_nas is False, sync_version_to_nas should not be called
+            mock_sync_nas.assert_not_called()
+
+            # Verify version.json written
+            v_file = os.path.join(temp_dir, "version.json")
+            self.assertTrue(os.path.exists(v_file))
+            with open(v_file, "r", encoding="utf-8") as f:
+                v_content = json.load(f)
+            self.assertEqual(v_content["app"]["versionCode"], 2)
+            self.assertEqual(v_content["firmware"]["versionCode"], 2)
+        finally:
+            shutil.rmtree(temp_dir, ignore_errors=True)
+
+    @patch("gsm.ota_utils.sync_version_to_nas")
+    @patch("app.upload_gitea_asset")
+    @patch("app.create_gitea_release")
+    @patch("app.load_settings")
+    @patch("app.get_token")
+    @patch("app.load_projects")
+    def test_arbitrary_bin_detection_and_release(self, mock_load, mock_get_token, mock_settings, mock_create_rel, mock_upload_asset, mock_sync_nas):
+        import app
+        from gsm.ota_utils import find_release_assets
+        import tempfile
+        import shutil
+        import json
+
+        temp_dir = tempfile.mkdtemp()
+        try:
+            # Create arbitrary bin files
+            bin1 = os.path.join(temp_dir, "custom_sensor.bin")
+            bin2 = os.path.join(temp_dir, "display_module.bin")
+            with open(bin1, "wb") as f:
+                f.write(b"firmware_content_1")
+            with open(bin2, "wb") as f:
+                f.write(b"firmware_content_2")
+
+            # 1. Test detection
+            detected = find_release_assets(temp_dir)
+            self.assertTrue(detected["bin_path"].endswith(".bin"))
+            self.assertTrue(detected["oled_bin_path"].endswith(".bin"))
+            self.assertNotEqual(detected["bin_path"], detected["oled_bin_path"])
+
+            # 2. Test release with arbitrary bin files
+            mock_load.return_value = [{
+                "id": "p_ota_custom",
+                "name": "ota_custom",
+                "path": temp_dir,
+                "gitea_remote": "http://192.168.1.114:3002/nas152/ota_custom.git"
+            }]
+            mock_get_token.return_value = "fake_tok"
+            mock_settings.return_value = {"gitea_server": "http://192.168.1.114:3002"}
+            mock_create_rel.return_value = {"id": 202}
+            mock_upload_asset.return_value = ({"browser_download_url": "http://download/asset"}, None)
+
+            client = app.app.test_client()
+            res = client.post("/api/projects/p_ota_custom/ota-release", json={
+                "tag_name": "v3.0.0",
+                "changelog": "Arbitrary bin test",
+                "bin_path": bin1,
+                "oled_bin_path": bin2,
+                "app_version_code": 3,
+                "fw_version_code": 3,
+                "sync_nas": False,
+                "build_apk": False
+            })
+            self.assertEqual(res.status_code, 200)
+            data = res.get_json()
+            self.assertTrue(data.get("success"))
+
+            # Check upload custom names passed to upload_gitea_asset
+            upload_names = [call.kwargs.get("custom_name") or call.args[6] for call in mock_upload_asset.call_args_list if len(call.args) > 6 or "custom_name" in call.kwargs]
+            self.assertIn("custom_sensor.bin", upload_names)
+            self.assertIn("display_module.bin", upload_names)
+
+            # Check version.json
+            v_file = os.path.join(temp_dir, "version.json")
+            with open(v_file, "r", encoding="utf-8") as f:
+                v_content = json.load(f)
+            self.assertEqual(v_content["firmware"]["binName"], "custom_sensor.bin")
+            self.assertEqual(v_content["firmware"]["secondaryBinName"], "display_module.bin")
+        finally:
+            shutil.rmtree(temp_dir, ignore_errors=True)
+
 
 class TestGitGraphAndTree(unittest.TestCase):
 
@@ -249,6 +371,251 @@ class TestGitGraphAndTree(unittest.TestCase):
         self.assertTrue(bool(data[0].get("hash")))
 
 
+class TestStageAndStatus(unittest.TestCase):
+
+    def test_parse_porcelain_unmodified_name_and_status(self):
+        from gsm.git_utils import get_status
+        import tempfile
+        import subprocess
+
+        with tempfile.TemporaryDirectory() as td:
+            subprocess.run(["git", "init"], cwd=td, capture_output=True)
+            subprocess.run(["git", "config", "user.name", "Test"], cwd=td, capture_output=True)
+            subprocess.run(["git", "config", "user.email", "test@example.com"], cwd=td, capture_output=True)
+
+            # Create file1 and commit
+            f1 = os.path.join(td, "app.py")
+            with open(f1, "w") as f:
+                f.write("print('hello')")
+            subprocess.run(["git", "add", "app.py"], cwd=td, capture_output=True)
+            subprocess.run(["git", "commit", "-m", "init"], cwd=td, capture_output=True)
+
+            # Modify file1 (unstaged)
+            with open(f1, "a") as f:
+                f.write("\nprint('world')")
+
+            # Create file with spaces
+            f2 = os.path.join(td, "folder name")
+            os.makedirs(f2, exist_ok=True)
+            f2_file = os.path.join(f2, "space file.txt")
+            with open(f2_file, "w") as f:
+                f.write("content")
+
+            status = get_status(td)
+            files = {f["path"]: f["status"] for f in status["files"]}
+
+            # app.py should be Modified, NOT Staged, and NOT pp.py!
+            self.assertIn("app.py", files)
+            self.assertEqual(files["app.py"], "Modified")
+            self.assertNotIn("pp.py", files)
+
+            # space file should be Untracked and NOT have enclosing quotes
+            self.assertTrue(any("space file.txt" in p and not p.startswith('"') and not p.endswith('"') for p in files.keys()))
+
+    def test_git_unlock_removes_stale_lock(self):
+        from gsm.git_utils import git_unlock, git_check_index_lock
+        import tempfile
+        import subprocess
+
+        with tempfile.TemporaryDirectory() as td:
+            subprocess.run(["git", "init"], cwd=td, capture_output=True)
+            lock_path = os.path.join(td, ".git", "index.lock")
+            with open(lock_path, "w") as f:
+                f.write("dummy lock")
+
+            self.assertTrue(os.path.exists(lock_path))
+            check = git_check_index_lock(td)
+            self.assertTrue(check["is_locked"])
+
+            res = git_unlock(td)
+            self.assertTrue(res["success"])
+            self.assertFalse(os.path.exists(lock_path))
+
+    def test_git_stage_all_progress_generator(self):
+        from gsm.git_utils import git_stage_all_progress
+        import tempfile
+        import subprocess
+
+        with tempfile.TemporaryDirectory() as td:
+            subprocess.run(["git", "init"], cwd=td, capture_output=True)
+            for i in range(3):
+                with open(os.path.join(td, f"file_{i}.txt"), "w") as f:
+                    f.write(f"content {i}")
+
+            events = list(git_stage_all_progress(td))
+            self.assertGreater(len(events), 0)
+            last_event = events[-1]
+            self.assertTrue(last_event.get("success"))
+            self.assertEqual(last_event.get("percent"), 100)
+
+    @patch("app.load_projects")
+    def test_api_stage_all_stream_endpoint(self, mock_load_projects):
+        import app
+        import tempfile
+        import subprocess
+
+        with tempfile.TemporaryDirectory() as td:
+            subprocess.run(["git", "init"], cwd=td, capture_output=True)
+            with open(os.path.join(td, "hello.py"), "w") as f:
+                f.write("print(1)")
+
+            mock_load_projects.return_value = [{"id": "p_stream_test", "name": "p_stream", "path": td}]
+            client = app.app.test_client()
+            res = client.post("/api/projects/p_stream_test/stage-all-stream")
+            self.assertEqual(res.status_code, 200)
+            data_str = res.get_data(as_text=True)
+            lines = [json.loads(l) for l in data_str.strip().splitlines() if l.strip()]
+            self.assertGreater(len(lines), 0)
+            self.assertTrue(lines[-1].get("success"))
+            self.assertEqual(lines[-1].get("percent"), 100)
+
+    def test_git_stage_all_handles_deleted_files(self):
+        from gsm.git_utils import git_stage_all_progress, _parse_porcelain
+        import tempfile
+        import subprocess
+
+        # Test porcelain statuses
+        self.assertEqual(_parse_porcelain("AM"), "Staged+Modified")
+        self.assertEqual(_parse_porcelain("UU"), "Conflict")
+        self.assertEqual(_parse_porcelain("AU"), "Conflict")
+        self.assertEqual(_parse_porcelain(" D"), "Deleted")
+        self.assertEqual(_parse_porcelain("D "), "Staged")
+
+        with tempfile.TemporaryDirectory() as td:
+            subprocess.run(["git", "init"], cwd=td, capture_output=True)
+            subprocess.run(["git", "config", "user.name", "Tester"], cwd=td, capture_output=True)
+            subprocess.run(["git", "config", "user.email", "test@test.com"], cwd=td, capture_output=True)
+            f_path = os.path.join(td, "to_delete.txt")
+            with open(f_path, "w") as f:
+                f.write("delete me")
+            subprocess.run(["git", "add", "to_delete.txt"], cwd=td, capture_output=True)
+            subprocess.run(["git", "commit", "-m", "commit file"], cwd=td, capture_output=True)
+
+            # Delete the file
+            os.remove(f_path)
+            events = list(git_stage_all_progress(td))
+            self.assertGreater(len(events), 0)
+            self.assertTrue(events[-1].get("success"))
+            self.assertEqual(events[-1].get("percent"), 100)
+
+
+class TestTwoRepoOtaDistribution(unittest.TestCase):
+
+    def test_parse_github_repo_url(self):
+        from gsm.api_utils import parse_github_repo_url
+        self.assertEqual(parse_github_repo_url("https://github.com/octocat/ota-public.git"), ("octocat", "ota-public"))
+        self.assertEqual(parse_github_repo_url("https://github.com/octocat/ota-public"), ("octocat", "ota-public"))
+        self.assertEqual(parse_github_repo_url("git@github.com:octocat/ota-public.git"), ("octocat", "ota-public"))
+        self.assertEqual(parse_github_repo_url(""), ("", ""))
+
+    @patch("gsm.ota_utils.upload_github_asset")
+    @patch("gsm.ota_utils.create_github_release")
+    @patch("gsm.ota_utils.subprocess.run")
+    def test_publish_two_repo_ota_flow(self, mock_subproc, mock_create_rel, mock_upload_asset):
+        from gsm.ota_utils import publish_two_repo_ota
+        import tempfile
+        import shutil
+
+        # Configure subprocess mock
+        mock_proc = MagicMock()
+        mock_proc.returncode = 0
+        mock_proc.stdout = "M docs/version.json"
+        mock_proc.stderr = ""
+        mock_subproc.return_value = mock_proc
+
+        mock_create_rel.return_value = {
+            "id": 888,
+            "tag_name": "v2.0.0",
+            "html_url": "https://github.com/octocat/ota-dist/releases/tag/v2.0.0"
+        }
+        mock_upload_asset.return_value = ({"browser_download_url": "https://github.com/asset"}, None)
+
+        temp_proj = tempfile.mkdtemp()
+        try:
+            # Create a sample web folder in Repo 1
+            web_dir = os.path.join(temp_proj, "web")
+            os.makedirs(web_dir)
+            with open(os.path.join(web_dir, "index.html"), "w") as f:
+                f.write("<h1>My Web App</h1>")
+
+            # Create dummy bin, apk and an extra file (e.g. spiffs.bin)
+            bin_file = os.path.join(temp_proj, "firmware.bin")
+            with open(bin_file, "wb") as f: f.write(b"\x00\x01\x02")
+            apk_file = os.path.join(temp_proj, "app-release.apk")
+            with open(apk_file, "wb") as f: f.write(b"PK")
+            extra_file = os.path.join(temp_proj, "spiffs.bin")
+            with open(extra_file, "wb") as f: f.write(b"FS_DATA")
+
+            res = publish_two_repo_ota(
+                project_path=temp_proj,
+                public_repo_url="https://github.com/octocat/ota-dist.git",
+                tag_name="v2.0.0",
+                app_ver_code=10,
+                fw_ver_code=10,
+                changelog="Big OTA release",
+                apk_path=apk_file,
+                bin_path=bin_file,
+                extra_files=[{"label": "SPIFFS File", "path": extra_file}],
+                github_token="ghp_test_token"
+            )
+
+            self.assertTrue(res["success"])
+            self.assertEqual(res["public_repo"], "octocat/ota-dist")
+            self.assertEqual(res["release_id"], 888)
+            self.assertEqual(len(res["extra_assets"]), 1)
+            mock_create_rel.assert_called_once()
+            # 3 assets (bin + apk + extra spiffs.bin) uploaded
+            self.assertEqual(mock_upload_asset.call_count, 3)
+        finally:
+            shutil.rmtree(temp_proj, ignore_errors=True)
+
+    @patch("app.publish_two_repo_ota")
+    @patch("app.load_settings")
+    @patch("app.save_projects")
+    @patch("app.load_projects")
+    def test_api_release_ota_two_repo_endpoint(self, mock_load_proj, mock_save_proj, mock_settings, mock_publish_2repo):
+        import app
+        import tempfile
+        import shutil
+
+        temp_dir = tempfile.mkdtemp()
+        try:
+            mock_load_proj.return_value = [{
+                "id": "p_two_repo",
+                "name": "private_project",
+                "path": temp_dir
+            }]
+            mock_settings.return_value = {"github_token": "ghp_mock"}
+            mock_publish_2repo.return_value = {
+                "success": True,
+                "logs": ["Step 1", "Step 2", "Step 3", "Step 4"],
+                "public_repo": "octocat/public-ota",
+                "apk_url": "https://dl/apk",
+                "bin_url": "https://dl/bin",
+                "release_id": 999,
+                "html_url": "https://github.com/octocat/public-ota/releases/tag/v3.0.0"
+            }
+
+            client = app.app.test_client()
+            res = client.post("/api/projects/p_two_repo/release-ota", json={
+                "tag_name": "v3.0.0",
+                "changelog": "Two-repo isolated OTA",
+                "ota_public_repo_url": "https://github.com/octocat/public-ota.git",
+                "sync_nas": False,
+                "build_apk": False
+            })
+
+            self.assertEqual(res.status_code, 200)
+            data = res.get_json()
+            self.assertTrue(data.get("success"))
+            self.assertEqual(data.get("public_repo"), "octocat/public-ota")
+            mock_publish_2repo.assert_called_once()
+        finally:
+            shutil.rmtree(temp_dir, ignore_errors=True)
+
+
 if __name__ == "__main__":
     unittest.main()
+
+
 

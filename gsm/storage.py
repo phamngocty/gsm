@@ -140,3 +140,48 @@ def delete_token(key: str) -> None:
     creds = _load_credential_file()
     creds.pop(key, None)
     _save_credential_file(creds)
+
+
+def get_saved_git_authors() -> list:
+    """Load saved git author accounts from settings."""
+    settings = load_settings()
+    authors = settings.get("saved_git_authors")
+    if authors is None:
+        authors = []
+    return authors
+
+
+def save_git_author_profile(name: str, email: str) -> list:
+    """Add or update an author profile in settings."""
+    name = name.strip()
+    email = email.strip()
+    if not name or not email:
+        return get_saved_git_authors()
+
+    settings = load_settings()
+    authors = settings.get("saved_git_authors", [])
+    found = False
+    for a in authors:
+        if a.get("email", "").lower() == email.lower():
+            a["name"] = name
+            found = True
+            break
+    if not found:
+        authors.append({"name": name, "email": email})
+
+    settings["saved_git_authors"] = authors
+    save_settings(settings)
+    return authors
+
+
+def delete_saved_git_author(email: str) -> list:
+    """Delete a saved author profile by email."""
+    settings = load_settings()
+    authors = [
+        a for a in settings.get("saved_git_authors", [])
+        if a.get("email", "").lower() != email.strip().lower()
+    ]
+    settings["saved_git_authors"] = authors
+    save_settings(settings)
+    return authors
+

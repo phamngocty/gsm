@@ -1,8 +1,89 @@
 <!-- Settings Modal -->
 <div class="modal-overlay" :class="{ visible: showSettingsModal }" @click.self="closeSettings">
     <div class="modal modal-settings">
-        <div class="modal-header"><h2>⚙️ Cài đặt</h2><button class="btn-close" @click="closeSettings">✖</button></div>
-        <div class="tab-content">
+        <div class="modal-header">
+            <h2>⚙️ Cài đặt</h2>
+            <button class="btn-close" @click="closeSettings">✖</button>
+        </div>
+        <div class="tabs">
+            <button class="tab" :class="{ active: settingsTab === 'author' }" @click="settingsTab = 'author'">👤 Tác giả Git</button>
+            <button class="tab" :class="{ active: settingsTab === 'services' }" @click="settingsTab = 'services'">☁️ Dịch vụ & Token</button>
+        </div>
+
+        <!-- TAB: GIT AUTHOR -->
+        <div v-if="settingsTab === 'author'" class="tab-content">
+            <div class="author-current-card">
+                <div class="author-current-title">Thông tin Git tác giả đang áp dụng</div>
+                <div class="author-current-val">
+                    <span v-if="gitAuthor.name">👤 <strong>[[ gitAuthor.name ]]</strong> &lt;[[ gitAuthor.email ]]&gt;</span>
+                    <span v-else style="color: var(--yellow);">⚠️ Chưa cấu hình thông tin tác giả Git</span>
+                    <span class="badge badge-sm" :class="gitAuthor.local_name ? 'badge-info' : 'badge-success'" style="margin-left:auto;">
+                        [[ gitAuthor.local_name ? '📁 Dự án này' : '🌐 Toàn hệ thống' ]]
+                    </span>
+                </div>
+            </div>
+
+            <div class="form-group">
+                <label>Chọn tài khoản đã lưu</label>
+                <div class="input-row">
+                    <select class="form-input" v-model="selectedAuthorIndex" @change="onSelectSavedAuthor">
+                        <option :value="-1">✍️ Tự nhập thủ công...</option>
+                        <option v-for="(acc, idx) in savedAuthors" :key="idx" :value="idx">
+                            [[ acc.name ]] &lt;[[ acc.email ]]&gt;
+                        </option>
+                    </select>
+                    <button class="btn btn-danger btn-sm" @click="deleteSelectedSavedAuthor" v-if="selectedAuthorIndex >= 0" title="Xoá tài khoản này khỏi danh sách">🗑️ Xoá</button>
+                </div>
+                <span class="help-text" v-if="savedAuthors.length === 0">💡 Chưa có tài khoản đã lưu. Hãy nhập thông tin bên dưới và tích chọn lưu lại.</span>
+            </div>
+
+            <div class="form-group" v-if="authorSuggestions.length > 0">
+                <label style="font-size: 11px; color: var(--text-muted); margin-bottom: 4px;">Gợi ý từ lịch sử commit / tài khoản:</label>
+                <div style="display: flex; flex-wrap: wrap; gap: 6px;">
+                    <button type="button" class="btn btn-secondary btn-xs" v-for="sug in authorSuggestions" :key="sug.email" @click="pickSuggestion(sug)" title="Bấm để dùng nhanh">
+                        [[ sug.name ]] &lt;[[ sug.email ]]&gt;
+                    </button>
+                </div>
+            </div>
+
+            <div class="form-group">
+                <label>Tên tác giả (user.name) *</label>
+                <input type="text" v-model="authorForm.name" class="form-input" placeholder="Ví dụ: phamngocty">
+            </div>
+
+            <div class="form-group">
+                <label>Email tác giả (user.email) *</label>
+                <input type="email" v-model="authorForm.email" class="form-input" placeholder="Ví dụ: phamngocty2000@gmail.com">
+            </div>
+
+            <div class="form-group">
+                <label class="checkbox-label">
+                    <input type="checkbox" v-model="authorForm.save_to_list">
+                    Lưu vào danh sách tài khoản để chọn nhanh lần sau
+                </label>
+            </div>
+
+            <div class="form-group">
+                <label>Phạm vi áp dụng</label>
+                <div class="author-scope-options">
+                    <label class="author-scope-option">
+                        <input type="radio" value="global" v-model="authorScope">
+                        <span>🌐 Toàn hệ thống (--global)</span>
+                    </label>
+                    <label class="author-scope-option" :style="!selectedProject ? 'opacity: 0.5; cursor: not-allowed;' : ''">
+                        <input type="radio" value="local" v-model="authorScope" :disabled="!selectedProject">
+                        <span>📁 Chỉ dự án này (--local[[ selectedProject ? ': ' + selectedProject.name : '' ]])</span>
+                    </label>
+                </div>
+            </div>
+
+            <button class="btn btn-primary btn-full" style="margin-top: 10px;" @click="applyGitAuthor" :disabled="savingAuthor || !authorForm.name.trim() || !authorForm.email.trim()">
+                [[ savingAuthor ? '⏳ Đang lưu...' : '💾 Áp dụng thông tin tác giả' ]]
+            </button>
+        </div>
+
+        <!-- TAB: SERVICES & TOKENS -->
+        <div v-if="settingsTab === 'services'" class="tab-content">
             <div class="form-group">
                 <label>GitHub Token (PAT)</label>
                 <div class="input-row"><input type="password" v-model="formSettings.github_token" class="form-input" :placeholder="settings.has_github_token ? '✅ Đã lưu' : 'ghp_...'"><button class="btn btn-secondary" @click="checkToken('github')" :disabled="!formSettings.github_token || formSettings.github_token === '••••••••'">[[ checking.github ? '⏳...' : '✅ Kiểm tra' ]]</button></div>
@@ -34,3 +115,4 @@
         </div>
     </div>
 </div>
+

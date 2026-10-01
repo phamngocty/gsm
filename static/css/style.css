@@ -287,6 +287,76 @@ body.resizing-sidebar .drag-handle-v { background: var(--accent); opacity: 0.5; 
 .help-text.success { color: var(--green); }
 .help-text.error { color: var(--red); }
 
+/* ─── Git Author Settings ─── */
+.author-current-card {
+    background: var(--bg-primary);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 12px 14px;
+    margin-bottom: 16px;
+}
+.author-current-title {
+    font-size: 11px;
+    text-transform: uppercase;
+    color: var(--text-muted);
+    font-weight: 600;
+    margin-bottom: 6px;
+    letter-spacing: 0.5px;
+}
+.author-current-val {
+    font-size: 13px;
+    font-weight: 500;
+    color: var(--text-primary);
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+.badge-sm {
+    font-size: 11px;
+    padding: 2px 8px;
+    border-radius: 4px;
+    font-weight: 600;
+}
+.badge-info {
+    background: rgba(96,165,250,0.15);
+    color: #60a5fa;
+    border: 1px solid rgba(96,165,250,0.3);
+}
+.badge-success {
+    background: rgba(74,222,128,0.15);
+    color: var(--green);
+    border: 1px solid rgba(74,222,128,0.3);
+}
+.author-scope-options {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    margin-top: 4px;
+    background: var(--bg-primary);
+    padding: 10px 12px;
+    border-radius: var(--radius);
+    border: 1px solid var(--border);
+}
+.author-scope-option {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 13px;
+    color: var(--text-primary);
+    cursor: pointer;
+}
+.author-scope-option input[type="radio"] {
+    accent-color: var(--accent);
+    width: 15px;
+    height: 15px;
+}
+.btn-xs {
+    padding: 2px 8px;
+    font-size: 11px;
+    height: 24px;
+    line-height: 20px;
+}
+
 /* ─── Progress Box ─── */
 .progress-box { margin-top: 12px; padding: 10px; background: var(--bg-primary); border-radius: var(--radius); max-height: 150px; overflow-y: auto; }
 .progress-box pre { font-family: var(--mono); font-size: 11px; line-height: 1.5; color: var(--text-secondary); white-space: pre-wrap; }
@@ -462,4 +532,114 @@ body.resizing-sidebar .drag-handle-v { background: var(--accent); opacity: 0.5; 
 .ota-code-pre { background: #12131c; color: #a9b1d6; border-radius: 6px; padding: 12px; font-size: 12px; font-family: 'JetBrains Mono', 'Fira Code', monospace; line-height: 1.5; overflow-x: auto; max-height: 280px; margin: 0; white-space: pre; border: 1px solid rgba(255,255,255,0.06); }
 .ota-prompt-pre { background: #181926; color: #cad3f5; border-radius: 6px; padding: 14px; font-size: 12.5px; font-family: 'JetBrains Mono', monospace; line-height: 1.6; overflow-y: auto; max-height: 380px; margin: 0; white-space: pre-wrap; border: 1px solid rgba(138, 180, 248, 0.2); }
 .ota-badge { display: inline-flex; align-items: center; justify-content: center; width: 20px; height: 20px; border-radius: 50%; background: var(--accent); color: #fff; font-size: 11px; font-weight: bold; }
+
+.ota-options-bar { display: flex; gap: 16px; margin: 6px 0 12px 0; padding: 8px 12px; background: var(--bg-surface); border: 1px solid var(--border); border-radius: var(--radius); flex-wrap: wrap; }
+.ota-options-bar label { cursor: pointer; display: inline-flex; align-items: center; gap: 6px; font-size: 12.5px; color: var(--text-secondary); }
+.ota-options-bar label:hover { color: var(--text-primary); }
+.ota-options-bar input[type="checkbox"] { accent-color: var(--accent); width: 15px; height: 15px; }
+.ota-log-item { padding: 3px 0; border-bottom: 1px solid rgba(255,255,255,0.04); font-family: var(--mono); font-size: 11.5px; }
+.ota-log-item:last-child { border-bottom: none; }
+
+/* ─── Main Project View Tabs ─── */
+.project-main-tabs { display: flex; gap: 8px; margin: 14px 0 16px 0; border-bottom: 2px solid var(--border); padding-bottom: 2px; }
+.pm-tab-btn { background: transparent; border: none; border-bottom: 3px solid transparent; color: var(--text-secondary); padding: 8px 18px; font-size: 13.5px; font-weight: 600; cursor: pointer; transition: all 0.2s; display: flex; align-items: center; gap: 8px; border-radius: 4px 4px 0 0; }
+.pm-tab-btn:hover { color: var(--text-primary); background: var(--bg-hover); }
+.pm-tab-btn.active { color: var(--accent); border-bottom-color: var(--accent); background: rgba(99, 102, 241, 0.08); }
+.pm-badge { background: var(--bg-secondary); color: var(--text-secondary); padding: 1px 7px; border-radius: 10px; font-size: 11px; font-weight: bold; border: 1px solid var(--border); }
+.pm-tab-btn.active .pm-badge { background: var(--accent); color: #fff; border-color: transparent; }
+.pm-badge-danger { background: rgba(239, 68, 68, 0.2); color: var(--red); padding: 1px 6px; border-radius: 10px; font-size: 11px; font-weight: bold; animation: pulse 1.5s infinite; }
+
+/* ─── Changes & Staging 2-Column Split View ─── */
+.changes-split-layout { display: flex; gap: 14px; min-height: 520px; align-items: flex-start; }
+.changes-list-pane { width: 380px; flex-shrink: 0; background: var(--bg-surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 12px; }
+.changes-diff-pane { flex: 1; min-width: 0; background: var(--bg-surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 12px; }
+.changes-file-row { display: flex; align-items: center; gap: 8px; padding: 7px 8px; border-radius: 4px; cursor: pointer; transition: all 0.15s; border: 1px solid transparent; margin-bottom: 3px; }
+.changes-file-row:hover { background: var(--bg-hover); }
+.changes-file-row.selected { background: rgba(99, 102, 241, 0.12); border-color: rgba(99, 102, 241, 0.35); }
+.changes-file-name { flex: 1; font-family: var(--mono); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* ─── Visual Branch Topology Diagram ─── */
+.branch-diagram-container { display: flex; flex-direction: column; gap: 16px; }
+.branch-hero-card { background: linear-gradient(135deg, rgba(99, 102, 241, 0.15) 0%, rgba(30, 30, 46, 0.7) 100%); border: 1.5px solid var(--accent); border-radius: var(--radius); padding: 16px 20px; box-shadow: 0 4px 20px rgba(99, 102, 241, 0.15); }
+.branch-hero-title { font-size: 18px; font-weight: bold; color: var(--text-primary); display: flex; align-items: center; gap: 10px; margin-bottom: 6px; }
+.branch-hero-badge { background: #22c55e; color: #000; font-size: 11px; font-weight: 800; padding: 2px 8px; border-radius: 12px; letter-spacing: 0.5px; }
+
+.branch-columns-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+.branch-col-card { background: var(--bg-surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 14px; }
+.branch-col-header { font-size: 14px; font-weight: bold; color: var(--text-primary); margin-bottom: 12px; display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid var(--border); padding-bottom: 8px; }
+
+.branch-card-item { background: var(--bg-secondary); border: 1px solid var(--border); border-radius: 6px; padding: 10px 12px; margin-bottom: 10px; transition: all 0.2s; position: relative; }
+.branch-card-item:hover { border-color: var(--accent); background: var(--bg-hover); transform: translateY(-1px); }
+.branch-card-item.is-current { border-color: #22c55e; background: rgba(34, 197, 94, 0.08); box-shadow: 0 0 10px rgba(34, 197, 94, 0.15); }
+
+.branch-card-title { display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px; }
+.branch-card-name { font-weight: 600; font-size: 13.5px; color: var(--text-primary); display: flex; align-items: center; gap: 6px; }
+.branch-card-meta { font-size: 11.5px; color: var(--text-muted); line-height: 1.4; }
+.branch-card-subject { font-size: 12px; color: var(--text-secondary); margin: 4px 0 6px 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+.branch-sync-pill { font-size: 11px; padding: 2px 7px; border-radius: 10px; font-weight: 600; }
+.branch-sync-synced { background: rgba(34, 197, 94, 0.15); color: #22c55e; }
+.branch-sync-ahead { background: rgba(245, 158, 11, 0.2); color: #f59e0b; }
+.branch-sync-behind { background: rgba(59, 130, 246, 0.2); color: #3b82f6; }
+.branch-sync-none { background: rgba(255, 255, 255, 0.06); color: var(--text-muted); }
+
+/* ─── Real-time Staging Progress Bar ─── */
+.staging-progress-card {
+    background: var(--bg-secondary);
+    border: 1px solid rgba(99, 102, 241, 0.35);
+    border-radius: var(--radius);
+    padding: 10px 12px;
+    margin-bottom: 12px;
+    box-shadow: 0 2px 10px rgba(0, 0, 0, 0.2);
+    animation: fadeIn 0.2s ease-in-out;
+}
+.staging-progress-box {
+    background: var(--bg-primary);
+    border: 1px solid rgba(99, 102, 241, 0.25);
+    border-radius: 6px;
+    padding: 8px 10px;
+    box-shadow: inset 0 1px 3px rgba(0, 0, 0, 0.2);
+}
+.progress-bar-bg {
+    width: 100%;
+    height: 7px;
+    background: rgba(255, 255, 255, 0.08);
+    border-radius: 4px;
+    overflow: hidden;
+    position: relative;
+}
+.progress-bar-fill {
+    height: 100%;
+    background: linear-gradient(90deg, #6366f1 0%, #38bdf8 100%);
+    border-radius: 4px;
+    transition: width 0.15s ease;
+    box-shadow: 0 0 8px rgba(99, 102, 241, 0.6);
+}
+.staging-current-file {
+    font-size: 11px;
+    color: var(--text-muted);
+    margin-top: 5px;
+    font-family: var(--mono);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+.spinner-inline {
+    display: inline-block;
+    width: 11px;
+    height: 11px;
+    border: 2px solid rgba(255, 255, 255, 0.2);
+    border-radius: 50%;
+    border-top-color: var(--accent);
+    animation: spin 0.8s linear infinite;
+    vertical-align: middle;
+}
+@keyframes spin {
+    to { transform: rotate(360deg); }
+}
+@keyframes fadeIn {
+    from { opacity: 0; transform: translateY(-3px); }
+    to { opacity: 1; transform: translateY(0); }
+}
+
 

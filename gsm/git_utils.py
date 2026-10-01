@@ -6,7 +6,7 @@ from typing import Optional
 
 def _run_git(args: list, cwd: Optional[str] = None) -> subprocess.CompletedProcess:
     result = subprocess.run(
-        ["git"] + args, cwd=cwd, capture_output=True, text=True, encoding="utf-8", timeout=120,
+        ["git"] + args, cwd=cwd, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=120,
     )
     return result
 
@@ -26,7 +26,7 @@ def is_git_repo(path: str) -> bool:
 def clone_repo(url: str, target_dir: str) -> list[str]:
     lines: list[str] = []
     proc = subprocess.Popen(
-        ["git", "clone", url, target_dir], stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, encoding="utf-8",
+        ["git", "clone", url, target_dir], stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, encoding="utf-8", errors="replace",
     )
     if proc.stdout:
         for line in proc.stdout:
@@ -38,18 +38,75 @@ def clone_repo(url: str, target_dir: str) -> list[str]:
     return lines
 
 
+def git_check_index_lock(project_path: str) -> dict:
+    """Check if .git/index.lock exists."""
+    lock_file = Path(project_path) / ".git" / "index.lock"
+    is_locked = lock_file.is_file()
+    return {"is_locked": is_locked, "lock_file": str(lock_file) if is_locked else ""}
+
+
+def git_unlock(project_path: str) -> dict:
+    """Remove .git/index.lock if present."""
+    lock_file = Path(project_path) / ".git" / "index.lock"
+    if lock_file.exists():
+        try:
+            lock_file.unlink()
+            return {"success": True, "message": "Đã mở khóa repository (xóa .git/index.lock)"}
+        except Exception as e:
+            return {"success": False, "error": f"Không thể xóa index.lock: {str(e)}"}
+    return {"success": True, "message": "Repository không bị khóa"}
+
+
+def _auto_clean_stale_lock(project_path: str) -> bool:
+    """If index.lock exists and no git process is running or it is stale (>5s), automatically remove it."""
+    lock_file = Path(project_path) / ".git" / "index.lock"
+    if not lock_file.exists():
+        return False
+    try:
+        import time
+        # If lock file is older than 5 seconds, it is almost certainly stale from a finished/crashed process
+        age = time.time() - lock_file.stat().st_mtime
+        if age > 5:
+            lock_file.unlink(missing_ok=True)
+            return True
+        # Check if git.exe is currently running
+        out = subprocess.check_output(["tasklist", "/FI", "IMAGENAME eq git.exe", "/FO", "CSV"], text=True)
+        if "git.exe" not in out:
+            lock_file.unlink(missing_ok=True)
+            return True
+    except Exception:
+        pass
+    return False
+
+
 def get_status(project_path: str) -> dict:
-    result = {"branch": "unknown", "has_conflict": False, "files": [], "ahead": 0, "behind": 0}
+    result = {"branch": "unknown", "has_conflict": False, "files": [], "ahead": 0, "behind": 0, "is_locked": False}
     if not is_git_repo(project_path):
         return result
+
+    # Check lock status (and auto-clean if stale)
+    lock_info = git_check_index_lock(project_path)
+    result["is_locked"] = lock_info["is_locked"]
+    if result["is_locked"] and _auto_clean_stale_lock(project_path):
+        result["is_locked"] = False
+
     r = _run_git(["rev-parse", "--abbrev-ref", "HEAD"], cwd=project_path)
     result["branch"] = r.stdout.strip() if r.returncode == 0 else "HEAD (detached)"
-    r = _run_git(["status", "--porcelain"], cwd=project_path)
+    # Use core.quotepath=false so Unicode/diacritics filenames aren't octal escaped
+    r = _run_git(["-c", "core.quotepath=false", "status", "--porcelain", "-uall"], cwd=project_path)
     if r.returncode == 0:
-        for line in r.stdout.splitlines():
-            line = line.strip()
-            if not line: continue
-            xy, filename = line[:2], line[3:]
+        for raw_line in r.stdout.splitlines():
+            if not raw_line or len(raw_line) < 3:
+                continue
+            xy = raw_line[:2]
+            filename = raw_line[3:].strip()
+            # Strip outer quotes added by git for paths with spaces
+            if filename.startswith('"') and filename.endswith('"'):
+                filename = filename[1:-1]
+            if " -> " in filename:
+                filename = filename.split(" -> ")[-1].strip()
+                if filename.startswith('"') and filename.endswith('"'):
+                    filename = filename[1:-1]
             status = _parse_porcelain(xy)
             result["files"].append({"path": filename, "status": status})
             if status == "Conflict": result["has_conflict"] = True
@@ -63,11 +120,37 @@ def get_status(project_path: str) -> dict:
 
 
 def _parse_porcelain(xy: str) -> str:
-    mapping = {"??": "Untracked", " M": "Modified", "M ": "Staged", "MM": "Staged+Modified",
-               " A": "Added", "A ": "Staged", " D": "Deleted", "D ": "Staged",
-               " R": "Renamed", "R ": "Staged", " C": "Copied", "C ": "Staged",
-               "UU": "Conflict", "AA": "Conflict", "DD": "Conflict"}
-    return mapping.get(xy, xy)
+    if len(xy) < 2:
+        return "Modified"
+    x, y = xy[0], xy[1]
+
+    # Merge conflicts in porcelain v1
+    if xy in ["UU", "AA", "DD", "AU", "UD", "UA", "DU"]:
+        return "Conflict"
+    if xy == "??":
+        return "Untracked"
+    if xy == "!!":
+        return "Ignored"
+
+    # Index is staged (x is non-space)
+    if x in ["M", "A", "D", "R", "C"]:
+        if y != " ":
+            return "Staged+Modified"
+        return "Staged"
+
+    # Index is clean, worktree has modifications (x is space)
+    if x == " ":
+        if y == "M":
+            return "Modified"
+        if y == "D":
+            return "Deleted"
+        if y == "A":
+            return "Added"
+        if y == "R":
+            return "Renamed"
+        return "Modified"
+
+    return xy
 
 
 def get_recent_commits(project_path: str, limit: int = 10) -> list[dict]:
@@ -145,18 +228,161 @@ def git_init(project_path: str) -> dict:
 
 
 def git_stage_file(project_path: str, file_path: str) -> dict:
+    _auto_clean_stale_lock(project_path)
     return _run_git_lines(["add", file_path], cwd=project_path)
 
 
 def git_unstage_file(project_path: str, file_path: str) -> dict:
+    _auto_clean_stale_lock(project_path)
     return _run_git_lines(["reset", "HEAD", "--", file_path], cwd=project_path)
 
 
 def git_stage_all(project_path: str) -> dict:
+    _auto_clean_stale_lock(project_path)
     return _run_git_lines(["add", "-A"], cwd=project_path)
 
 
+def git_stage_all_progress(project_path: str, chunk_size: int = 5):
+    """Stage all files with incremental progress generator for real-time percentage progress bar."""
+    if not is_git_repo(project_path):
+        yield {"success": False, "error": "Not a git repository", "percent": 0, "current": 0, "total": 0}
+        return
+
+    _auto_clean_stale_lock(project_path)
+    lock = git_check_index_lock(project_path)
+    if lock["is_locked"]:
+        yield {
+            "success": False,
+            "error": "Repository đang bị khóa bởi .git/index.lock. Vui lòng mở khóa để tiếp tục.",
+            "is_locked": True,
+            "percent": 0,
+            "current": 0,
+            "total": 0,
+        }
+        return
+
+    # Query all modified/untracked files
+    r = _run_git(["-c", "core.quotepath=false", "status", "--porcelain", "-uall"], cwd=project_path)
+    if r.returncode != 0:
+        yield {"success": False, "error": r.stderr.strip() or "Git status failed", "percent": 0, "current": 0, "total": 0}
+        return
+
+    files_to_add = []
+    for raw_line in r.stdout.splitlines():
+        if not raw_line or len(raw_line) < 3:
+            continue
+        xy = raw_line[:2]
+        # Skip if already fully staged (clean in worktree)
+        if xy in ["M ", "A ", "D ", "R ", "C "]:
+            continue
+        fn = raw_line[3:].strip()
+        if fn.startswith('"') and fn.endswith('"'):
+            fn = fn[1:-1]
+        if " -> " in fn:
+            fn = fn.split(" -> ")[-1].strip()
+            if fn.startswith('"') and fn.endswith('"'):
+                fn = fn[1:-1]
+        files_to_add.append(fn)
+
+    total = len(files_to_add)
+    if total == 0:
+        yield {
+            "success": True,
+            "done": True,
+            "percent": 100,
+            "current": 0,
+            "total": 0,
+            "message": "Tất cả file đã được stage hoặc không có thay đổi."
+        }
+        return
+
+    # Yield initial 0% event
+    yield {
+        "success": True,
+        "done": False,
+        "percent": 0,
+        "current": 0,
+        "total": total,
+        "file": files_to_add[0]
+    }
+
+    if chunk_size is None or chunk_size <= 5:
+        if total > 500:
+            actual_chunk_size = 50
+        elif total > 100:
+            actual_chunk_size = 20
+        elif total > 30:
+            actual_chunk_size = 10
+        else:
+            actual_chunk_size = 5
+    else:
+        actual_chunk_size = chunk_size
+
+    processed = 0
+    errors = []
+    for i in range(0, total, actual_chunk_size):
+        chunk = files_to_add[i : i + actual_chunk_size]
+        # Use git add -A -- chunk to support new, modified, and deleted files
+        r_add = _run_git(["add", "-A", "--"] + chunk, cwd=project_path)
+        if r_add.returncode != 0:
+            # Fallback to single-file staging for each item in this chunk
+            chunk_success_count = 0
+            for single_file in chunk:
+                r_single = _run_git(["add", "-A", "--", single_file], cwd=project_path)
+                if r_single.returncode == 0:
+                    chunk_success_count += 1
+                else:
+                    errors.append(f"{single_file}: {r_single.stderr.strip() or 'add failed'}")
+                processed += 1
+                pct = min(99, int((processed / total) * 100))
+                yield {
+                    "success": True,
+                    "done": False,
+                    "percent": pct,
+                    "current": processed,
+                    "total": total,
+                    "file": single_file
+                }
+            if chunk_success_count == 0 and len(chunk) > 0 and len(errors) == total:
+                # Every single file in the repo failed, e.g. locked index
+                first_err = errors[0] if errors else "git add failed"
+                yield {
+                    "success": False,
+                    "error": first_err,
+                    "is_locked": "index.lock" in first_err,
+                    "percent": int((processed / total) * 100),
+                    "current": processed,
+                    "total": total,
+                    "file": chunk[0]
+                }
+                return
+            continue
+
+        processed += len(chunk)
+        pct = min(99, int((processed / total) * 100))
+        yield {
+            "success": True,
+            "done": False,
+            "percent": pct,
+            "current": processed,
+            "total": total,
+            "file": chunk[-1]
+        }
+
+    # Final completion event
+    yield {
+        "success": len(errors) < total,
+        "done": True,
+        "percent": 100,
+        "current": total,
+        "total": total,
+        "file": "",
+        "warnings": errors if errors else None
+    }
+
+
 def git_commit(project_path: str, message: str) -> dict:
+    _auto_clean_stale_lock(project_path)
     return _run_git_lines(["commit", "-m", message], cwd=project_path)
 
 
@@ -185,6 +411,7 @@ def git_push(project_path: str, remote: str = "origin", branch: str = "", force:
 
 
 def git_pull(project_path: str, remote: str = "origin", branch: str = "") -> dict:
+    _auto_clean_stale_lock(project_path)
     args = ["pull", remote]
     if branch: args.append(branch)
     return _run_git_lines(args, cwd=project_path)
@@ -203,6 +430,39 @@ def git_push_tag(project_path: str, tag: str, remote: str = "origin") -> dict:
 
 def git_branch_list(project_path: str) -> list[dict]:
     result = []
+    r = _run_git([
+        "for-each-ref",
+        "--format=%(refname:short)|%(HEAD)|%(objectname:short)|%(upstream:short)|%(upstream:track)|%(committerdate:relative)|%(subject)",
+        "refs/heads", "refs/remotes"
+    ], cwd=project_path)
+
+    if r.returncode == 0 and r.stdout.strip():
+        for line in r.stdout.splitlines():
+            line = line.strip()
+            if not line: continue
+            parts = line.split("|", 6)
+            name = parts[0].strip()
+            if not name or "->" in name or name == "origin": continue
+            is_current = len(parts) > 1 and parts[1].strip() == "*"
+            hash_val = parts[2].strip() if len(parts) > 2 else ""
+            upstream = parts[3].strip() if len(parts) > 3 else ""
+            track = parts[4].strip("[] ").strip() if len(parts) > 4 else ""
+            date = parts[5].strip() if len(parts) > 5 else ""
+            subject = parts[6].strip() if len(parts) > 6 else ""
+            is_remote = name.startswith("origin/") or name.startswith("remotes/")
+            result.append({
+                "name": name,
+                "current": is_current,
+                "remote": is_remote,
+                "hash": hash_val,
+                "upstream": upstream,
+                "track": track,
+                "date": date,
+                "subject": subject
+            })
+        if result: return result
+
+    # Fallback to standard git branch --all
     r = _run_git(["branch", "--all"], cwd=project_path)
     if r.returncode != 0: return result
     for line in r.stdout.splitlines():
@@ -211,7 +471,16 @@ def git_branch_list(project_path: str) -> list[dict]:
         is_current = line.startswith("*")
         name = line.lstrip("* ").strip()
         if "->" in name: continue
-        result.append({"name": name, "current": is_current, "remote": name.startswith("remotes/")})
+        result.append({
+            "name": name,
+            "current": is_current,
+            "remote": name.startswith("remotes/") or name.startswith("origin/"),
+            "hash": "",
+            "upstream": "",
+            "track": "",
+            "date": "",
+            "subject": ""
+        })
     return result
 
 
@@ -536,3 +805,90 @@ def git_resolve_conflict(project_path: str, file_path: str, choice: str = "ours"
 
     r_add = _run_git(["add", "--", file_path], cwd=project_path)
     return {"success": r_add.returncode == 0, "error": r_add.stderr.strip() if r_add.returncode != 0 else ""}
+
+
+def git_get_author(project_path: Optional[str] = None) -> dict:
+    """Get current git user.name and user.email (global, local, and effective)."""
+    r_g_name = _run_git(["config", "--global", "user.name"])
+    r_g_email = _run_git(["config", "--global", "user.email"])
+    global_name = r_g_name.stdout.strip() if r_g_name.returncode == 0 else ""
+    global_email = r_g_email.stdout.strip() if r_g_email.returncode == 0 else ""
+
+    local_name = ""
+    local_email = ""
+    if project_path and is_git_repo(project_path):
+        r_l_name = _run_git(["config", "--local", "user.name"], cwd=project_path)
+        r_l_email = _run_git(["config", "--local", "user.email"], cwd=project_path)
+        if r_l_name.returncode == 0:
+            local_name = r_l_name.stdout.strip()
+        if r_l_email.returncode == 0:
+            local_email = r_l_email.stdout.strip()
+
+    effective_name = local_name if local_name else global_name
+    effective_email = local_email if local_email else global_email
+
+    return {
+        "name": effective_name,
+        "email": effective_email,
+        "global_name": global_name,
+        "global_email": global_email,
+        "local_name": local_name,
+        "local_email": local_email,
+        "is_configured": bool(effective_name and effective_email),
+    }
+
+
+def git_set_author(name: str, email: str, scope: str = "global", project_path: Optional[str] = None) -> dict:
+    """Set git user.name and user.email (scope: 'global' or 'local')."""
+    name = name.strip()
+    email = email.strip()
+    if not name or not email:
+        return {"success": False, "error": "Name and email cannot be empty"}
+
+    if scope == "local":
+        if not project_path or not is_git_repo(project_path):
+            return {"success": False, "error": "Invalid project path or not a Git repository"}
+        r1 = _run_git(["config", "--local", "user.name", name], cwd=project_path)
+        r2 = _run_git(["config", "--local", "user.email", email], cwd=project_path)
+    else:
+        r1 = _run_git(["config", "--global", "user.name", name])
+        r2 = _run_git(["config", "--global", "user.email", email])
+
+    success = (r1.returncode == 0 and r2.returncode == 0)
+    err = (r1.stderr or r2.stderr).strip() if not success else ""
+    return {"success": success, "error": err}
+
+
+def git_get_suggested_authors(project_paths: Optional[list[str]] = None) -> list[dict]:
+    """Extract distinct authors from commit history of projects."""
+    suggestions = []
+    seen = set()
+
+    # Always check global first
+    author_info = git_get_author()
+    if author_info.get("global_name") and author_info.get("global_email"):
+        key = (author_info["global_name"].lower(), author_info["global_email"].lower())
+        seen.add(key)
+        suggestions.append({"name": author_info["global_name"], "email": author_info["global_email"]})
+
+    paths = project_paths or []
+    for p in paths:
+        if not p or not is_git_repo(p):
+            continue
+        r = _run_git(["log", "-n", "15", "--format=%an|%ae"], cwd=p)
+        if r.returncode != 0 or not r.stdout:
+            continue
+        for line in r.stdout.splitlines():
+            line = line.strip()
+            if "|" not in line:
+                continue
+            parts = line.split("|", 1)
+            aname, aemail = parts[0].strip(), parts[1].strip()
+            if aname and aemail and "@" in aemail:
+                key = (aname.lower(), aemail.lower())
+                if key not in seen:
+                    seen.add(key)
+                    suggestions.append({"name": aname, "email": aemail})
+
+    return suggestions
+

@@ -310,3 +310,16 @@ def upload_github_asset(token: str, owner: str, repo: str, release_id: int, file
     except Exception as e:
         return None, str(e)
 
+
+def parse_github_repo_url(url: str) -> tuple[str, str]:
+    """Parse owner and repo name from GitHub URL (HTTPS or SSH format)."""
+    if not url:
+        return "", ""
+    clean = url.strip().rstrip("/").removesuffix(".git")
+    if ":" in clean and not clean.startswith("http://") and not clean.startswith("https://"):
+        clean = clean.split(":")[-1]
+    parts = [p for p in clean.split("/") if p]
+    if len(parts) >= 2:
+        return parts[-2], parts[-1]
+    return "", ""
+

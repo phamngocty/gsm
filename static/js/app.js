@@ -163,6 +163,35 @@ const app = createApp({
             ).length : 0;
         });
 
+        // Staging Progress with real-time percentage
+        const stagingProgress = ref({
+            active: false,
+            percent: 0,
+            current: 0,
+            total: 0,
+            file: '',
+            error: ''
+        });
+
+        // Project Main Navigation Tab ('graph' | 'changes' | 'branches' | 'releases')
+        const projectMainTab = ref('graph');
+        const branchSearchQuery = ref('');
+        const branchCreateFrom = ref('');
+
+        const localBranches = computed(() => {
+            const q = branchSearchQuery.value.trim().toLowerCase();
+            return branches.value.filter(b => !b.remote && (!q || b.name.toLowerCase().includes(q)));
+        });
+
+        const remoteBranches = computed(() => {
+            const q = branchSearchQuery.value.trim().toLowerCase();
+            return branches.value.filter(b => b.remote && (!q || b.name.toLowerCase().includes(q)));
+        });
+
+        const currentBranchObj = computed(() => {
+            return branches.value.find(b => b.current) || null;
+        });
+
         // Branch
         const newBranchName = ref('');
         const branchResult = ref(null);
@@ -222,6 +251,14 @@ const app = createApp({
 
         const settings = ref({});
         const formSettings = ref({ github_token: '', gitea_token: '', gitea_server_url: '', gitea_username: '', gitea_password: '', fork_path: '' });
+        const settingsTab = ref('author');
+        const gitAuthor = ref({ name: '', email: '', global_name: '', global_email: '', local_name: '', local_email: '', is_configured: false });
+        const savedAuthors = ref([]);
+        const authorSuggestions = ref([]);
+        const selectedAuthorIndex = ref(-1);
+        const authorScope = ref('global');
+        const authorForm = ref({ name: '', email: '', save_to_list: true });
+        const savingAuthor = ref(false);
         const checking = ref({ github: false, gitea: false, password: false });
         const tokenResults = ref({ github: null, gitea: null, password: null });
 
@@ -941,7 +978,98 @@ const app = createApp({
             await refreshStatus();
         }
         async function toggleStage(file) { if (isStaged(file.status)) await unstageFile(file.path); else await stageFile(file.path); }
-        async function stageAll() { try { await gitCmd(selectedProject.value.id, 'stage_all'); toast('Stage all OK', 'success'); await refreshStatus(); } catch (e) { toast(e.message, 'error'); } }
+        async function stageAll() {
+            if (!selectedProject.value) return;
+            if (stagingProgress.value.active) return;
+
+            stagingProgress.value = {
+                active: true,
+                percent: 0,
+                current: 0,
+                total: 0,
+                file: 'Đang chuẩn bị...',
+                error: ''
+            };
+
+            try {
+                const response = await fetch(`/api/projects/${selectedProject.value.id}/stage-all-stream`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' }
+                });
+
+                if (!response.ok) {
+                    throw new Error(`HTTP ${response.status}: Không thể bắt đầu stage all`);
+                }
+
+                const reader = response.body.getReader();
+                const decoder = new TextDecoder();
+                let buffer = '';
+
+                while (true) {
+                    const { value, done } = await reader.read();
+                    if (done) break;
+                    buffer += decoder.decode(value, { stream: true });
+                    const lines = buffer.split('\n');
+                    buffer = lines.pop(); // Giữ phần dư chưa trọn dòng
+
+                    for (const line of lines) {
+                        const trimmed = line.trim();
+                        if (!trimmed) continue;
+                        try {
+                            const evt = JSON.parse(trimmed);
+                            if (evt.success === false) {
+                                throw new Error(evt.error || 'Lỗi khi stage file');
+                            }
+                            if (typeof evt.percent === 'number') {
+                                stagingProgress.value.percent = evt.percent;
+                            }
+                            stagingProgress.value.current = evt.current || 0;
+                            stagingProgress.value.total = evt.total || 0;
+                            stagingProgress.value.file = evt.file || '';
+
+                            if (evt.done) {
+                                stagingProgress.value.percent = 100;
+                            }
+                        } catch (pe) {
+                            if (pe.message && !pe.message.includes('JSON')) {
+                                throw pe;
+                            }
+                        }
+                    }
+                }
+
+                if (buffer.trim()) {
+                    try {
+                        const evt = JSON.parse(buffer.trim());
+                        if (typeof evt.percent === 'number') stagingProgress.value.percent = evt.percent;
+                    } catch(e) {}
+                }
+
+                stagingProgress.value.percent = 100;
+                toast('✅ Đã Stage tất cả các file thành công!', 'success');
+                await refreshStatus();
+            } catch (e) {
+                console.warn('Streaming stage_all failed, falling back:', e);
+                try {
+                    stagingProgress.value.file = 'Thực hiện qua phương thức dự phòng...';
+                    const fallback = await gitCmd(selectedProject.value.id, 'stage_all');
+                    if (fallback.success) {
+                        stagingProgress.value.percent = 100;
+                        toast('✅ Stage all thành công!', 'success');
+                        await refreshStatus();
+                    } else {
+                        throw new Error(fallback.error || 'Lỗi stage all');
+                    }
+                } catch (fallbackErr) {
+                    stagingProgress.value.error = fallbackErr.message || e.message;
+                    toast(fallbackErr.message || e.message, 'error');
+                }
+            } finally {
+                setTimeout(() => {
+                    stagingProgress.value.active = false;
+                }, 1200);
+            }
+        }
         async function refreshStatus() {
             if (!selectedProject.value) return;
             try { const s = await api(`/api/projects/${selectedProject.value.id}/status`); projectStatus.value = s; updateProjectStatus(selectedProject.value.id, s); } catch (e) { projectStatus.value = { branch: '?', files: [], ahead: 0, behind: 0, has_conflict: false }; }
@@ -1005,7 +1133,26 @@ const app = createApp({
 
         // ── Commit ──
         async function executeCommit() {
-            if (!commitMessage.value.trim()) return;
+            if (!commitMessage.value.trim()) {
+                toast('Vui lòng nhập thông điệp commit!', 'error');
+                return;
+            }
+            if (stagedCount.value === 0) {
+                if (projectStatus.value.files && projectStatus.value.files.length > 0) {
+                    if (confirm('📝 Chưa có file nào được stage.\n\nBạn có muốn tự động Stage tất cả và Commit ngay không?')) {
+                        await stageAll();
+                        if (stagedCount.value === 0) {
+                            toast('Không thể commit do chưa có file nào được stage', 'error');
+                            return;
+                        }
+                    } else {
+                        return;
+                    }
+                } else {
+                    toast('Không có thay đổi nào để commit', 'info');
+                    return;
+                }
+            }
             commitResult.value = null;
             try {
                 let msg = commitMessage.value.trim();
@@ -1247,7 +1394,45 @@ const app = createApp({
             } catch (e) { syncResult.value = { success: false, message: e.message }; }
             finally { syncing.value = null; }
         }
-        async function executePull() { syncing.value = 'pull'; syncResult.value = null; try { const d = await gitCmd(selectedProject.value.id, 'pull'); syncResult.value = d; if (d.success) toast('Pull OK', 'success'); await refreshStatus(); await refreshLog(); } catch (e) { syncResult.value = { success: false, message: e.message }; } finally { syncing.value = null; } }
+        async function executePull() {
+            syncing.value = 'pull';
+            syncResult.value = null;
+            try {
+                const d = await gitCmd(selectedProject.value.id, 'pull');
+                syncResult.value = d;
+                if (d.success) toast('✅ Kéo về (Pull) thành công!', 'success');
+                await refreshStatus();
+                await refreshLog();
+            } catch (e) {
+                syncResult.value = { success: false, message: e.message };
+                const msg = (e.message || '').toLowerCase();
+                if (msg.includes('overwritten by merge') || msg.includes('commit your changes or stash')) {
+                    if (confirm('⚠️ Pull bị chặn do có file thay đổi cục bộ chưa commit.\n\n➡️ Nhấn OK để tự động Cất giữ (Stash) ➔ Kéo về (Pull) ➔ Khôi phục lại (Stash Pop).\n❌ Nhấn Cancel để giữ nguyên.')) {
+                        try {
+                            toast('📦 Đang tạm cất thay đổi (git stash)...', 'info');
+                            await gitCmd(selectedProject.value.id, 'stash_push', { message: 'Auto-stash before pull' });
+                            toast('⬇️ Đang kéo về từ remote (git pull)...', 'info');
+                            const pullResp = await gitCmd(selectedProject.value.id, 'pull');
+                            syncResult.value = pullResp;
+                            if (pullResp.success) {
+                                toast('📦 Đang khôi phục lại thay đổi (git stash pop)...', 'info');
+                                await gitCmd(selectedProject.value.id, 'stash_pop');
+                                toast('✅ Pull và khôi phục thay đổi thành công!', 'success');
+                            } else {
+                                toast('⚠️ Pull thất bại sau khi stash. Đang hoàn trả stash...', 'error');
+                                await gitCmd(selectedProject.value.id, 'stash_pop');
+                            }
+                            await refreshStatus();
+                            await refreshLog();
+                        } catch (stashErr) {
+                            toast(stashErr.message, 'error');
+                        }
+                    }
+                }
+            } finally {
+                syncing.value = null;
+            }
+        }
         async function executeFetch() { syncing.value = 'fetch'; syncResult.value = null; try { const d = await gitCmd(selectedProject.value.id, 'fetch'); syncResult.value = d; if (d.success) toast('Fetch OK', 'success'); await refreshStatus(); } catch (e) { syncResult.value = { success: false, message: e.message }; } finally { syncing.value = null; } }
         async function executeStashPush() { try { const d = await gitCmd(selectedProject.value.id, 'stash_push'); if (d.success) { toast('Stash OK', 'success'); await refreshStatus(); } } catch (e) { toast(e.message, 'error'); } }
 
@@ -1387,22 +1572,58 @@ const app = createApp({
             setTimeout(() => { el.style.opacity = '0'; el.style.transform = 'translateX(100%)'; el.style.transition = 'all 0.3s ease'; setTimeout(() => el.remove(), 300); }, 3500);
         }
 
-        // ── OTA Release Management ──
-        const otaReleaseTag = ref('v1.0.1');
+        // ── OTA Release State ──
+        const otaReleaseTag = ref('');
+        const otaPublicRepoUrl = ref('');
         const otaAppVerCode = ref(1);
         const otaFwVerCode = ref(1);
-        const otaApkPath = ref('d:\\Documents\\PlatformIO\\Tdriver\\TYMAP\\app\\build\\outputs\\apk\\debug\\app-debug.apk');
-        const otaBinPath = ref('d:\\Documents\\PlatformIO\\Tdriver\\TYMAP\\firmware\\esp32_s3_gc9a01\\.pio\\build\\esp32-s3-devkitc-1\\firmware.bin');
-        const otaOledBinPath = ref('d:\\Documents\\PlatformIO\\Tdriver\\TYMAP\\firmware\\esp32_c3_oled\\.pio\\build\\esp32-c3-devkitm-1\\firmware.bin');
-        const otaChangelog = ref('• Cập nhật ứng dụng TYMAP & Firmware ESP32 mới.\n• Tối ưu hóa Bluetooth BLE kết nối ổn định.');
+        const otaApkPath = ref('');
+        const otaBinPath = ref('');
+        const otaOledBinPath = ref('');
+        const otaExtraFiles = ref([]); // [{ label: '', path: '' }]
+        const otaChangelog = ref('');
         const otaLoading = ref(false);
         const otaDetecting = ref(false);
         const otaResult = ref(null);
+        const otaAutoBuildApk = ref(true);
+        const otaSyncNas = ref(true);
+        const copiedTarget = ref('');
+
+        function addExtraOtaFile() {
+            otaExtraFiles.value.push({ label: '', path: '' });
+        }
+
+        function removeExtraOtaFile(index) {
+            otaExtraFiles.value.splice(index, 1);
+        }
+
+        async function browseExtraOtaFile(index) {
+            try {
+                const resp = await fetch('/api/browse-file', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ type: 'all' })
+                });
+                const data = await resp.json();
+                if (data.file_path && otaExtraFiles.value[index]) {
+                    otaExtraFiles.value[index].path = data.file_path;
+                    if (!otaExtraFiles.value[index].label) {
+                        const base = data.file_path.replace(/\\/g, '/').split('/').pop();
+                        otaExtraFiles.value[index].label = base;
+                    }
+                }
+            } catch (e) {
+                toast('Lỗi duyệt file: ' + e.message, 'error');
+            }
+        }
 
         async function autoDetectOtaAssets() {
             if (!selectedProject.value) return;
             otaDetecting.value = true;
             try {
+                if (selectedProject.value.ota_public_repo_url) {
+                    otaPublicRepoUrl.value = selectedProject.value.ota_public_repo_url;
+                }
                 const resp = await fetch(`/api/projects/${selectedProject.value.id}/ota-detect`);
                 const data = await resp.json();
                 if (data.apk_path) otaApkPath.value = data.apk_path;
@@ -1447,6 +1668,7 @@ const app = createApp({
             otaLoading.value = true;
             otaResult.value = null;
             try {
+                const validExtraFiles = otaExtraFiles.value.filter(item => item && item.path && item.path.trim());
                 const resp = await fetch(`/api/projects/${selectedProject.value.id}/ota-release`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
@@ -1457,8 +1679,13 @@ const app = createApp({
                         apk_path: otaApkPath.value,
                         bin_path: otaBinPath.value,
                         oled_bin_path: otaOledBinPath.value,
+                        extra_files: validExtraFiles,
                         app_version_code: otaAppVerCode.value,
-                        fw_version_code: otaFwVerCode.value
+                        fw_version_code: otaFwVerCode.value,
+                        build_apk: otaAutoBuildApk.value,
+                        sync_nas: otaSyncNas.value,
+                        ota_public_repo_url: otaPublicRepoUrl.value.trim(),
+                        public_repo_url: otaPublicRepoUrl.value.trim()
                     })
                 });
                 const data = await resp.json();
@@ -1482,6 +1709,7 @@ const app = createApp({
         const otaInitLoading = ref(false);
 
         function copyOtaSnippet(text, label) {
+            copiedTarget.value = label || '';
             if (navigator.clipboard && navigator.clipboard.writeText) {
                 navigator.clipboard.writeText(text).then(() => {
                     toast(`📋 Đã sao chép ${label || 'mã nguồn'}!`, 'success');
@@ -1491,6 +1719,9 @@ const app = createApp({
             } else {
                 copyText(text);
             }
+            setTimeout(() => {
+                if (copiedTarget.value === label) copiedTarget.value = '';
+            }, 2500);
         }
 
         async function initOtaProjectTemplate() {
@@ -1514,60 +1745,342 @@ const app = createApp({
             }
         }
 
+        function getOtaContext() {
+            const proj = selectedProject.value;
+            const projName = (proj && proj.name) ? proj.name : 'ESP32_IoT_Project';
+            const tag = (otaReleaseTag.value && otaReleaseTag.value.trim()) ? otaReleaseTag.value.trim() : 'v1.0.0';
+            const cleanTag = tag.replace(/^v/i, '') || '1.0.0';
+            const appCode = parseInt(otaAppVerCode.value, 10) || 1;
+            const fwCode = parseInt(otaFwVerCode.value, 10) || 1;
+            const changelog = (otaChangelog.value && otaChangelog.value.trim()) ? otaChangelog.value.trim() : '• Cập nhật tính năng mới và cải thiện độ ổn định';
+
+            function extractFileName(p, fallback) {
+                if (!p || !p.trim()) return fallback;
+                const normalized = p.trim().replace(/\\/g, '/');
+                const last = normalized.split('/').pop();
+                return last || fallback;
+            }
+
+            const apkFileName = extractFileName(otaApkPath.value, `${projName}-release.apk`);
+            const binFileName = extractFileName(otaBinPath.value, 'firmware.bin');
+            const secondaryBinFileName = otaOledBinPath.value ? extractFileName(otaOledBinPath.value, 'firmware_secondary.bin') : '';
+
+            // Remote URL detection
+            let remoteUrl = (proj && proj.github_remote) || (proj && proj.gitea_remote) || '';
+            if (!remoteUrl && remotes.value && remotes.value.length > 0) {
+                remoteUrl = remotes.value[0].url || '';
+            }
+
+            let owner = 'nas152';
+            let repo = projName;
+            if (remoteUrl) {
+                const clean = remoteUrl.replace(/\.git$/i, '').replace(/\/$/, '');
+                const parts = clean.split(/[:/]/).filter(Boolean);
+                if (parts.length >= 2) {
+                    owner = parts[parts.length - 2];
+                    repo = parts[parts.length - 1];
+                }
+            }
+
+            const isGitea = remoteUrl.toLowerCase().includes('gitea') || remoteUrl.includes('3002') || remoteUrl.includes('192.168');
+            const giteaServer = (settings.value && settings.value.gitea_server && settings.value.gitea_server.trim())
+                ? settings.value.gitea_server.trim()
+                : 'http://192.168.1.114:3002';
+
+            let rawVersionUrl = `https://raw.githubusercontent.com/${owner}/${repo}/main/version.json`;
+            let downloadBaseUrl = `https://github.com/${owner}/${repo}/releases/download/${tag}`;
+            if (isGitea) {
+                rawVersionUrl = `${giteaServer}/api/v1/repos/${owner}/${repo}/raw/version.json`;
+                downloadBaseUrl = `${giteaServer}/${owner}/${repo}/releases/download/${tag}`;
+            }
+
+            const apkUrl = `${downloadBaseUrl}/${apkFileName}`;
+            const binUrl = `${downloadBaseUrl}/${binFileName}`;
+            const secondaryBinUrl = secondaryBinFileName ? `${downloadBaseUrl}/${secondaryBinFileName}` : '';
+
+            // Danh sách các file phát hành mở rộng khác (extra files)
+            const extraAssets = [];
+            if (otaExtraFiles.value && otaExtraFiles.value.length > 0) {
+                otaExtraFiles.value.forEach((item, idx) => {
+                    if (item && item.path && item.path.trim()) {
+                        const fname = extractFileName(item.path, `extra_asset_${idx + 1}.bin`);
+                        extraAssets.push({
+                            label: item.label || fname,
+                            fileName: fname,
+                            url: `${downloadBaseUrl}/${fname}`
+                        });
+                    }
+                });
+            }
+
+            return {
+                projName,
+                tag,
+                cleanTag,
+                appCode,
+                fwCode,
+                changelog,
+                apkFileName,
+                binFileName,
+                secondaryBinFileName,
+                hasSecondaryBin: Boolean(otaOledBinPath.value),
+                extraAssets,
+                owner,
+                repo,
+                rawVersionUrl,
+                downloadBaseUrl,
+                apkUrl,
+                binUrl,
+                secondaryBinUrl
+            };
+        }
+
         const otaVersionJsonSample = computed(() => {
-            return `{\n  "app": {\n    "versionCode": 1,\n    "versionName": "1.0.0",\n    "apkUrl": "https://raw.githubusercontent.com/<user>/<repo>/releases/download/v1.0.0/app-release.apk",\n    "changelog": "• Bản phát hành đầu tiên\\n• Tính năng cơ bản"\n  },\n  "firmware": {\n    "versionCode": 1,\n    "versionName": "1.0.0",\n    "binUrl": "https://raw.githubusercontent.com/<user>/<repo>/releases/download/v1.0.0/firmware.bin",\n    "oledBinUrl": "",\n    "changelog": "• Khởi tạo firmware ban đầu"\n  }\n}`;
+            const ctx = getOtaContext();
+            const sample = {
+                app: {
+                    versionCode: ctx.appCode,
+                    versionName: ctx.cleanTag,
+                    apkUrl: ctx.apkUrl,
+                    apkName: ctx.apkFileName,
+                    changelog: ctx.changelog
+                },
+                firmware: {
+                    versionCode: ctx.fwCode,
+                    versionName: ctx.cleanTag,
+                    binUrl: ctx.binUrl,
+                    binName: ctx.binFileName,
+                    ...(ctx.hasSecondaryBin ? {
+                        secondaryBinUrl: ctx.secondaryBinUrl,
+                        secondaryBinName: ctx.secondaryBinFileName,
+                        oledBinUrl: ctx.secondaryBinUrl
+                    } : {
+                        secondaryBinUrl: "",
+                        oledBinUrl: ""
+                    }),
+                    changelog: ctx.changelog
+                },
+                assets: ctx.extraAssets.map(a => ({
+                    label: a.label,
+                    fileName: a.fileName,
+                    downloadUrl: a.url
+                }))
+            };
+            return JSON.stringify(sample, null, 2);
         });
 
         const otaEsp32WifiCode = computed(() => {
-            return `// ===============================================\n// NẠP FIRMWARE OTA QUA WIFI (ESP32 - PlatformIO / Arduino)\n// ===============================================\n#include <WiFi.h>\n#include <HTTPClient.h>\n#include <HTTPUpdate.h>\n#include <ArduinoJson.h>\n\nconst int CURRENT_FW_VERSION = 1; // Khai báo phiên bản hiện tại\nconst char* VERSION_CHECK_URL = "https://raw.githubusercontent.com/<user>/<repo>/main/version.json";\n\nvoid checkAndPerformWiFiOTA() {\n    if (WiFi.status() != WL_CONNECTED) return;\n\n    HTTPClient http;\n    http.begin(VERSION_CHECK_URL);\n    int httpCode = http.GET();\n\n    if (httpCode == HTTP_CODE_OK) {\n        String payload = http.getString();\n        DynamicJsonDocument doc(1024);\n        deserializeJson(doc, payload);\n\n        int remoteVer = doc["firmware"]["versionCode"];\n        const char* binUrl = doc["firmware"]["binUrl"];\n\n        if (remoteVer > CURRENT_FW_VERSION && binUrl != nullptr && strlen(binUrl) > 0) {\n            Serial.printf("🚀 Bản mới v%d > v%d! Đang tải & nạp OTA...\\n", remoteVer, CURRENT_FW_VERSION);\n            WiFiClient client;\n            httpUpdate.setLedPin(2, LOW); // Đèn báo nạp LED_BUILTIN\n            httpUpdate.rebootOnUpdate(true); // Tự khởi động lại khi nạp xong\n\n            t_httpUpdate_return ret = httpUpdate.update(client, binUrl);\n            if (ret == HTTP_UPDATE_FAILED) {\n                Serial.printf("❌ Lỗi nạp OTA (%d): %s\\n", httpUpdate.getLastError(), httpUpdate.getLastErrorString().c_str());\n            }\n        }\n    }\n    http.end();\n}`;
+            const ctx = getOtaContext();
+            return `// ===============================================
+// NẠP BẤT KỲ FILE FIRMWARE (.BIN) QUA WIFI OTA (ESP32 - PlatformIO / Arduino)
+// Dự án: ${ctx.projName} | Phiên bản mục tiêu: ${ctx.tag}
+// Không giới hạn loại màn hình hay phần cứng; nạp bất kỳ file .bin nào được chỉ định
+// ===============================================
+#include <WiFi.h>
+#include <HTTPClient.h>
+#include <HTTPUpdate.h>
+#include <ArduinoJson.h>
+
+const int CURRENT_FW_VERSION = ${ctx.fwCode}; // Phiên bản firmware hiện tại của thiết bị
+const char* VERSION_CHECK_URL = "${ctx.rawVersionUrl}";
+const char* EXPECTED_BIN_NAME = "${ctx.binFileName}"; // Tên file firmware chính (bất kỳ file .bin nào)
+
+void checkAndPerformWiFiOTA() {
+    if (WiFi.status() != WL_CONNECTED) return;
+
+    HTTPClient http;
+    http.begin(VERSION_CHECK_URL);
+    int httpCode = http.GET();
+
+    if (httpCode == HTTP_CODE_OK) {
+        String payload = http.getString();
+        DynamicJsonDocument doc(2048);
+        deserializeJson(doc, payload);
+
+        int remoteVer = doc["firmware"]["versionCode"];
+        // Đọc URL nạp firmware chính
+        const char* binUrl = doc["firmware"]["binUrl"];
+        const char* binName = doc["firmware"]["binName"] | EXPECTED_BIN_NAME;
+
+        if (remoteVer > CURRENT_FW_VERSION && binUrl != nullptr && strlen(binUrl) > 0) {
+            Serial.printf("🚀 Phát hiện phiên bản mới: v%d > v%d! File: %s\\n", remoteVer, CURRENT_FW_VERSION, binName);
+            Serial.printf("📥 Đang tải & nạp OTA từ: %s\\n", binUrl);
+
+            WiFiClient client;
+            httpUpdate.setLedPin(2, LOW); // Đèn báo trạng thái nạp (nếu có)
+            httpUpdate.rebootOnUpdate(true); // Tự động khởi động lại sau khi nạp thành công
+
+            t_httpUpdate_return ret = httpUpdate.update(client, binUrl);
+            if (ret == HTTP_UPDATE_FAILED) {
+                Serial.printf("❌ Lỗi nạp OTA (%d): %s\\n", httpUpdate.getLastError(), httpUpdate.getLastErrorString().c_str());
+            } else if (ret == HTTP_UPDATE_OK) {
+                Serial.println("✅ Nạp Firmware OTA thành công!");
+            }
+        } else {
+            Serial.println("👌 Firmware thiết bị đã ở phiên bản mới nhất.");
+        }
+    } else {
+        Serial.printf("⚠️ Không thể tải version.json (HTTP code: %d)\\n", httpCode);
+    }
+    http.end();
+}`;
         });
 
         const otaEsp32BleCode = computed(() => {
-            return `// ===============================================\n// NẠP FIRMWARE OTA QUA BLUETOOTH BLE (Update.h)\n// Khi không có WiFi ngoài đường (nhận data từ Android)\n// ===============================================\n#include <Update.h>\n#include <NimBLEDevice.h>\n\n#define CHA_OTA_UUID "f0a1b2c3-d4e5-4f60-a012-bcdef0123456"\nbool isOtaMode = false;\nuint32_t otaExpectedSize = 0;\nuint32_t otaWritten = 0;\n\n// Trong BLE Characteristic Write Callback:\nvoid onOtaDataReceived(const uint8_t* data, size_t len) {\n    if (!isOtaMode && len >= 4) {\n        // Gói đầu tiên: 4 bytes kích thước file firmware.bin\n        memcpy(&otaExpectedSize, data, 4);\n        if (otaExpectedSize > 0 && Update.begin(otaExpectedSize, U_FLASH)) {\n            isOtaMode = true;\n            otaWritten = 0;\n            Serial.printf("BLE OTA: Bắt đầu nạp! Dung lượng: %d bytes\\n", otaExpectedSize);\n        }\n    } else if (isOtaMode) {\n        if (len == 1 && data[0] == 0x31) { // Mã hoàn tất nạp\n            if (Update.end(true)) {\n                Serial.println("✅ Nạp Firmware BLE OTA thành công! Đang khởi động lại...");\n                ESP.restart();\n            }\n            isOtaMode = false;\n        } else {\n            Update.write((uint8_t*)data, len);\n            otaWritten += len;\n        }\n    }\n}`;
+            const ctx = getOtaContext();
+            return `// ===============================================
+// NẠP BẤT KỲ FILE FIRMWARE (.BIN) QUA BLUETOOTH BLE (Update.h)
+// Dự án: ${ctx.projName} | File nhị phân: ${ctx.binFileName}
+// Cho phép nạp firmware hoặc tài nguyên từ App Android khi không có mạng WiFi
+// ===============================================
+#include <Update.h>
+#include <NimBLEDevice.h>
+
+#define CHA_OTA_UUID "f0a1b2c3-d4e5-4f60-a012-bcdef0123456"
+bool isOtaMode = false;
+uint32_t otaExpectedSize = 0;
+uint32_t otaWritten = 0;
+
+// Trong BLE Characteristic Write Callback khi nhận từng chunk dữ liệu .bin từ điện thoại:
+void onOtaDataReceived(const uint8_t* data, size_t len) {
+    if (!isOtaMode && len >= 4) {
+        // Gói đầu tiên: 4 bytes kích thước file .bin (${ctx.binFileName})
+        memcpy(&otaExpectedSize, data, 4);
+        if (otaExpectedSize > 0 && Update.begin(otaExpectedSize, U_FLASH)) {
+            isOtaMode = true;
+            otaWritten = 0;
+            Serial.printf("BLE OTA [${ctx.binFileName}]: Bắt đầu nạp! Dung lượng: %d bytes\\n", otaExpectedSize);
+        }
+    } else if (isOtaMode) {
+        if (len == 1 && data[0] == 0x31) { // Gói báo hoàn tất truyền file từ App
+            if (Update.end(true)) {
+                Serial.println("✅ Nạp Firmware BLE OTA thành công! Đang khởi động lại...");
+                ESP.restart();
+            } else {
+                Serial.printf("❌ Lỗi Update.end: %s\\n", Update.errorString());
+            }
+            isOtaMode = false;
+        } else {
+            Update.write((uint8_t*)data, len);
+            otaWritten += len;
+        }
+    }
+}`;
         });
 
         const otaAndroidCode = computed(() => {
-            return `// ===============================================\n// ANDROID IN-APP UPDATE MANAGER (Kotlin Coroutine)\n// ===============================================\npackage com.example.app.utils\n\nimport android.content.Context\nimport android.content.Intent\nimport androidx.core.content.FileProvider\nimport kotlinx.coroutines.*\nimport org.json.JSONObject\nimport java.io.File\nimport java.net.URL\n\nobject UpdateManager {\n    fun checkUpdate(context: Context, versionUrl: String) {\n        CoroutineScope(Dispatchers.IO).launch {\n            try {\n                val jsonStr = URL(versionUrl).readText()\n                val json = JSONObject(jsonStr).getJSONObject("app")\n                val remoteCode = json.getInt("versionCode")\n                val apkUrl = json.getString("apkUrl")\n                val changelog = json.optString("changelog")\n\n                val currentCode = context.packageManager.getPackageInfo(context.packageName, 0).versionCode\n                if (remoteCode > currentCode) {\n                    withContext(Dispatchers.Main) {\n                        // 1. Hiển thị Dialog thông báo phiên bản mới\n                        // 2. Tải APK và mở Intent cài đặt:\n                        // val intent = Intent(Intent.ACTION_VIEW).apply {\n                        //     setDataAndType(apkUri, "application/vnd.android.package-archive")\n                        //     flags = Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_ACTIVITY_NEW_TASK\n                        // }\n                        // context.startActivity(intent)\n                    }\n                }\n            } catch (e: Exception) { e.printStackTrace() }\n        }\n    }\n}`;
+            const ctx = getOtaContext();
+            const pkgName = `com.example.${ctx.repo.toLowerCase().replace(/[^a-z0-9_]/g, '_')}`;
+            return `// ===============================================
+// ANDROID IN-APP UPDATE MANAGER (Kotlin Coroutine)
+// Dự án: ${ctx.projName} | File cài đặt: ${ctx.apkFileName}
+// ===============================================
+package ${pkgName}.utils
+
+import android.content.Context
+import android.content.Intent
+import androidx.core.content.FileProvider
+import kotlinx.coroutines.*
+import org.json.JSONObject
+import java.io.File
+import java.net.URL
+
+object UpdateManager {
+    const val VERSION_CHECK_URL = "${ctx.rawVersionUrl}"
+
+    fun checkUpdate(context: Context) {
+        CoroutineScope(Dispatchers.IO).launch {
+            try {
+                val jsonStr = URL(VERSION_CHECK_URL).readText()
+                val json = JSONObject(jsonStr).getJSONObject("app")
+                val remoteCode = json.getInt("versionCode")
+                val apkUrl = json.getString("apkUrl")
+                val apkName = json.optString("apkName", "${ctx.apkFileName}")
+                val changelog = json.optString("changelog")
+
+                val currentCode = context.packageManager.getPackageInfo(context.packageName, 0).versionCode
+                if (remoteCode > currentCode) {
+                    withContext(Dispatchers.Main) {
+                        // 1. Hiển thị Dialog thông báo có phiên bản mới (${ctx.tag}) kèm Changelog
+                        // 2. Tải file APK ($apkName) từ $apkUrl về bộ nhớ tạm (cacheDir)
+                        // 3. Mở Intent cài đặt qua FileProvider an toàn:
+                        // val apkFile = File(context.cacheDir, apkName)
+                        // val apkUri = FileProvider.getUriForFile(context, "\${context.packageName}.provider", apkFile)
+                        // val intent = Intent(Intent.ACTION_VIEW).apply {
+                        //     setDataAndType(apkUri, "application/vnd.android.package-archive")
+                        //     flags = Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_ACTIVITY_NEW_TASK
+                        // }
+                        // context.startActivity(intent)
+                    }
+                }
+            } catch (e: Exception) {
+                e.printStackTrace()
+            }
+        }
+    }
+}`;
         });
 
         const otaAiPrompt = computed(() => {
-            return `Bạn là một kỹ sư chuyên gia về Hệ thống Nhúng IoT (ESP32 / PlatformIO / Arduino C++) và Phát triển Ứng dụng Di động Android (Kotlin).
-Tôi muốn bạn viết mã nguồn hoàn chỉnh để tích hợp tính năng Cập Nhật Từ Xa OTA (Firmware OTA & In-App APK Update) cho dự án của tôi theo kiến trúc chuẩn phân phối phiên bản qua file version.json:
+            const ctx = getOtaContext();
+            const secBinInfo = ctx.hasSecondaryBin 
+                ? `\n    "secondaryBinUrl": "${ctx.secondaryBinUrl}",\n    "secondaryBinName": "${ctx.secondaryBinFileName}",` 
+                : '';
+            const extraAssetsInfo = ctx.extraAssets.length > 0
+                ? `\n  "assets": [\n${ctx.extraAssets.map(a => `    { "label": "${a.label}", "fileName": "${a.fileName}", "url": "${a.url}" }`).join(',\n')}\n  ],`
+                : '';
+            return `Bạn là một Chuyên gia Lập trình Cấp cao về Hệ Thống Nhúng IoT (ESP32 / PlatformIO / Arduino C++) và Phát triển Ứng dụng Di động Android (Kotlin).
+Tôi cần bạn triển khai hoặc tái cấu trúc tính năng Tự Động Cập Nhật Từ Xa OTA (Firmware OTA & Android In-App APK Update) cho dự án: "${ctx.projName}".
 
-1. KIẾN TRÚC HỆ THỐNG:
-- Máy chủ lưu trữ file metadata \`version.json\` trên GitHub/Gitea Release hoặc máy chủ NAS:
+QUY TẮC THIẾT KẾ:
+1. KHÔNG PHỤ THUỘC PHẦN CỨNG: Không giới hạn ở bất kỳ loại phần cứng cố định nào (chẳng hạn không bắt buộc màn hình tròn GC9A01 hay OLED). Tôi có thể thêm và thay đổi BẤT KỲ file firmware .bin nào (firmware chính, firmware phụ, màn hình mở rộng, SPIFFS/LittleFS filesystem bin, bootloader...) hoặc đính kèm nhiều file khác nhau vào bản phát hành.
+2. TÁCH BIỆT & LINH HOẠT: Toàn bộ đường dẫn tải file được đọc động từ file metadata \`version.json\`.
+
+---
+1. CẤU TRÚC PHÂN PHỐI METADATA (version.json):
+- File \`version.json\` được lưu trữ và truy cập công khai tại:
+  ${ctx.rawVersionUrl}
+- Cấu trúc JSON chuẩn cho dự án "${ctx.projName}":
 {
   "app": {
-    "versionCode": 2,
-    "versionName": "1.0.2",
-    "apkUrl": "https://<domain>/releases/download/v1.0.2/app-release.apk",
-    "changelog": "• Cập nhật giao diện mới\\n• Tối ưu hóa hiệu năng"
+    "versionCode": ${ctx.appCode},
+    "versionName": "${ctx.cleanTag}",
+    "apkUrl": "${ctx.apkUrl}",
+    "apkName": "${ctx.apkFileName}",
+    "changelog": "${ctx.changelog.replace(/\n/g, '\\n')}"
   },
   "firmware": {
-    "versionCode": 2,
-    "versionName": "1.0.2",
-    "binUrl": "https://<domain>/releases/download/v1.0.2/firmware.bin",
-    "oledBinUrl": "",
-    "changelog": "• Vá lỗi ngắt kết nối WiFi/BLE"
-  }
+    "versionCode": ${ctx.fwCode},
+    "versionName": "${ctx.cleanTag}",
+    "binUrl": "${ctx.binUrl}",
+    "binName": "${ctx.binFileName}",${secBinInfo}
+    "changelog": "${ctx.changelog.replace(/\n/g, '\\n')}"
+  },${extraAssetsInfo}
+  "releaseTag": "${ctx.tag}"
 }
 
-2. YÊU CẦU MÃ NGUỒN FIRMWARE ESP32 (C++ / PlatformIO):
-- Khai báo hằng số phiên bản hiện tại: \`const int CURRENT_FW_VERSION = 1;\`
-- Viết hàm kiểm tra và nạp OTA qua WiFi:
-  + Dùng HTTPClient gửi GET tới URL version.json.
-  + Dùng ArduinoJson parse lấy \`doc["firmware"]["versionCode"]\` và URL file .bin.
-  + So sánh: Nếu \`remoteVersion > CURRENT_FW_VERSION\`, dùng \`httpUpdate.update(client, binUrl)\` để nạp trực tiếp.
-  + Điều khiển LED báo trạng thái và tự động gọi \`ESP.restart()\` sau khi nạp thành công.
-- (Tùy chọn) Viết thêm kênh nạp firmware qua Bluetooth BLE (sử dụng thư viện \`Update.h\`) để nhận file firmware .bin truyền từ App Android khi không có mạng WiFi ngoài đường.
+---
+2. YÊU CẦU MÃ NGUỒN ESP32 (C++ / PlatformIO):
+- Hằng số phiên bản hiện tại trên thiết bị: \`const int CURRENT_FW_VERSION = ${ctx.fwCode};\`.
+- URL kiểm tra: \`const char* VERSION_CHECK_URL = "${ctx.rawVersionUrl}";\`.
+- Tên file firmware mục tiêu: "${ctx.binFileName}" (hoặc nạp bất kỳ file .bin nào được trỏ bởi trường \`binUrl\` trong version.json).
+- Kênh 1 - Nạp qua WiFi OTA (\`HTTPUpdate.h\` + \`ArduinoJson\`):
+  + Tải \`version.json\`, bóc tách \`versionCode\` và URL file .bin.
+  + Nếu \`remoteVersion > CURRENT_FW_VERSION\`, gọi \`httpUpdate.update(client, binUrl)\` để nạp trực tiếp file .bin bất kỳ vào Flash.
+  + Bật LED hiển thị quá trình nạp và tự động \`ESP.restart()\` khi hoàn tất.
+- Kênh 2 - Nạp qua Bluetooth BLE (\`Update.h\`):
+  + Hỗ trợ nhận từng block dữ liệu của file .bin gửi từ App Android qua BLE Characteristic khi thiết bị ở môi trường không có sóng WiFi.
 
+---
 3. YÊU CẦU MÃ NGUỒN ANDROID (Kotlin):
-- Viết module \`UpdateManager.kt\` sử dụng Kotlin Coroutine (Dispatchers.IO).
-- Tải file version.json, so sánh với \`BuildConfig.VERSION_CODE\`.
-- Nếu có phiên bản mới, hiển thị AlertDialog chứa Changelog ghi chú bản cập nhật.
-- Khi người dùng nhấn "Cập nhật", tải file APK và mở Intent cài đặt thông qua FileProvider an toàn trên Android 10+.
+- Viết \`UpdateManager.kt\` dùng Kotlin Coroutines (Dispatchers.IO).
+- Tải \`version.json\` từ "${ctx.rawVersionUrl}".
+- So sánh \`remoteCode > BuildConfig.VERSION_CODE\`.
+- Hiển thị Dialog thông báo phiên bản ${ctx.tag} và changelog:
+  "${ctx.changelog.replace(/\n/g, ' ')}"
+- Tải file APK ("${ctx.apkFileName}") từ "${ctx.apkUrl}" vào cache/downloads và gọi Intent mở cài đặt thông qua FileProvider an toàn.
 
-Vui lòng viết mã nguồn chi tiết, hoàn chỉnh, có chú thích tiếng Việt dễ hiểu và cung cấp cấu hình platformio.ini cùng AndroidManifest.xml tương ứng.`;
+Hãy viết mã nguồn chi tiết, đầy đủ, chia thành các file rõ ràng, có chú thích tiếng Việt và hướng dẫn tích hợp vào dự án.`;
         });
 
         // ── Return ──
@@ -1581,15 +2094,18 @@ Vui lòng viết mã nguồn chi tiết, hoàn chỉnh, có chú thích tiếng 
             fileIcon, fileIconClass, onTreeItemClick,
             dragOverPath, onTreeDragStart, onTreeDragOver, onTreeDragLeave, onTreeDrop,
             showCommitPanel, showBranchPanel,
-            commitMessage, commitDescription, commitResult, stagedCount, autoPushAfterCommit,
+            projectMainTab, branchSearchQuery, branchCreateFrom, localBranches, remoteBranches, currentBranchObj,
+            commitMessage, commitDescription, commitResult, stagedCount, autoPushAfterCommit, stagingProgress,
             newBranchName, branchResult, mergeSourceBranch, merging, mergeBranchInto, executeMerge,
             newRemoteName, newRemoteUrl, creatingRemote,
             initGitLoading, initResult, isGitRepo, gitConnectionClass,
             showReleasesPanel, newReleaseTag, newReleaseTitle, newReleaseDesc, releases, releaseResult,
             releaseTargetGithub, releaseTargetGitea, standardReleaseLoading, toggleProjectOta,
             fetchReleases, createRelease, deleteRelease, pushReleaseTag,
-            otaReleaseTag, otaAppVerCode, otaFwVerCode, otaApkPath, otaBinPath, otaOledBinPath, otaChangelog, otaLoading, otaDetecting, otaResult,
+            otaReleaseTag, otaAppVerCode, otaFwVerCode, otaApkPath, otaBinPath, otaOledBinPath, otaExtraFiles, otaChangelog, otaLoading, otaDetecting, otaResult,
+            addExtraOtaFile, removeExtraOtaFile, browseExtraOtaFile,
             browseOtaFile, submitOtaRelease, autoDetectOtaAssets,
+            otaAutoBuildApk, otaSyncNas, copiedTarget, otaPublicRepoUrl,
             otaSubTab, otaInitLoading, initOtaProjectTemplate, copyOtaSnippet,
             otaVersionJsonSample, otaEsp32WifiCode, otaEsp32BleCode, otaAndroidCode, otaAiPrompt,
             graphData, graphRowHeight, graphSvgWidth, selectedCommit, selectedCommitDiff, contextMenu, commitNodeClass, formatDateVerbose, showContextMenu, openFileInExplorer, checkoutCommit, promptCreateBranchFromCommit, fetchGraph, renderGraphSegments,

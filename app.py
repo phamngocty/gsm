@@ -9,21 +9,26 @@ import webbrowser
 from pathlib import Path
 from threading import Timer
 
-from flask import Flask, render_template, request, jsonify, send_file
+from flask import Flask, render_template, request, jsonify, send_file, Response, stream_with_context
 
 from gsm.config import DATA_DIR, APP_NAME, APP_VERSION, DEFAULT_PORT
-from gsm.storage import load_projects, save_projects, load_settings, save_settings, get_token, set_token, update_project_ota
+from gsm.storage import (
+    load_projects, save_projects, load_settings, save_settings,
+    get_token, set_token, update_project_ota,
+    get_saved_git_authors, save_git_author_profile, delete_saved_git_author,
+)
 from gsm.git_utils import (
     is_git_repo, get_status, get_recent_commits, clone_repo,
     open_in_fork, setup_multi_push,
-    git_init, git_stage_file, git_unstage_file, git_stage_all,
-    git_commit, git_push, git_pull, git_fetch, git_push_tag,
+    git_init, git_stage_file, git_unstage_file, git_stage_all, git_stage_all_progress,
+    git_commit, git_push, git_pull, git_fetch, git_push_tag, git_unlock, git_check_index_lock,
     git_branch_list, git_branch_create, git_branch_delete, git_branch_switch, git_branch_rename,
     git_merge, git_stash_push, git_stash_pop, git_stash_list, git_stash_drop,
     git_log_detailed, git_diff, git_remote_list, git_remote_add, git_remote_remove,
     git_reset, git_tag_list, git_tag_create, git_tag_delete,
     git_init, git_custom_command, git_tree, git_read_file, git_log_graph,
     git_archive_zip, git_diff_parsed, git_resolve_conflict,
+    git_get_author, git_set_author, git_get_suggested_authors,
 )
 from gsm.api_utils import (
     check_github_token, check_gitea_token, check_gitea_password,
@@ -31,7 +36,7 @@ from gsm.api_utils import (
     list_gitea_repos, list_gitea_repos_basic_auth, list_github_repos,
     upload_gitea_asset, create_github_release, upload_github_asset,
 )
-from gsm.ota_utils import find_release_assets, sync_version_to_nas
+from gsm.ota_utils import find_release_assets, sync_version_to_nas, publish_two_repo_ota
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 log = logging.getLogger("gsm")
@@ -411,13 +416,14 @@ def api_git_command(project_id, cmd):
     data = request.get_json(silent=True) or {}
 
     cmd_map = {
-        "stage_file":    lambda: git_stage_file(path, data.get("file", "")),
-        "unstage_file":  lambda: git_unstage_file(path, data.get("file", "")),
-        "stage_all":     lambda: git_stage_all(path),
-        "commit":        lambda: git_commit(path, data.get("message", "")),
-        "push":          lambda: git_push(path, data.get("remote", "origin"), data.get("branch", ""), data.get("force", False)),
-        "pull":          lambda: git_pull(path, data.get("remote", "origin"), data.get("branch", "")),
-        "fetch":         lambda: git_fetch(path, data.get("remote", "")),
+        "stage_file":    lambda: _git_result(git_stage_file(path, data.get("file", ""))),
+        "unstage_file":  lambda: _git_result(git_unstage_file(path, data.get("file", ""))),
+        "stage_all":     lambda: _git_result(git_stage_all(path)),
+        "commit":        lambda: _git_result(git_commit(path, data.get("message", ""))),
+        "push":          lambda: _git_result(git_push(path, data.get("remote", "origin"), data.get("branch", ""), data.get("force", False))),
+        "pull":          lambda: _git_result(git_pull(path, data.get("remote", "origin"), data.get("branch", ""))),
+        "fetch":         lambda: _git_result(git_fetch(path, data.get("remote", ""))),
+        "unlock":        lambda: _git_result(git_unlock(path)),
         "branch_list":   lambda: jsonify(git_branch_list(path)),
         "branch_create": lambda: _git_result(git_branch_create(path, data.get("name", ""), data.get("from", ""))),
         "branch_delete": lambda: _git_result(git_branch_delete(path, data.get("name", ""))),
@@ -449,6 +455,19 @@ def api_git_command(project_id, cmd):
     if not fn: return jsonify({"error": f"Unknown git command: {cmd}"}), 400
     try: return fn()
     except Exception as e: return jsonify({"error": str(e), "success": False}), 500
+
+
+@app.route("/api/projects/<project_id>/stage-all-stream", methods=["POST"])
+def api_stage_all_stream(project_id):
+    project, err = _require_project(project_id, require_git=True)
+    if err: return jsonify({"error": err, "success": False}), 400
+    path = project["path"]
+
+    def generate():
+        for event in git_stage_all_progress(path):
+            yield json.dumps(event) + "\n"
+
+    return Response(stream_with_context(generate()), mimetype="application/x-ndjson")
 
 
 @app.route("/api/projects/<project_id>/diff-detail", methods=["GET", "POST"])
@@ -670,6 +689,8 @@ def api_get_settings():
     settings["has_gitea_token"] = get_token("gitea_token") is not None
     settings["has_gitea_username"] = get_token("gitea_username") is not None
     settings["has_gitea_password"] = get_token("gitea_password") is not None
+    settings["saved_git_authors"] = get_saved_git_authors()
+    settings["git_author"] = git_get_author()
     return jsonify(settings)
 
 
@@ -689,7 +710,82 @@ def api_save_settings():
     for key in ("fork_path", "gitea_server_url"):
         if key in data: settings[key] = data[key].strip()
     save_settings(settings)
+
+    # If git author info is also provided
+    git_name = data.get("git_name", "").strip()
+    git_email = data.get("git_email", "").strip()
+    git_scope = data.get("git_scope", "global").strip()
+    project_path = data.get("project_path", "").strip()
+    if git_name and git_email:
+        git_set_author(git_name, git_email, scope=git_scope, project_path=project_path)
+        if data.get("save_author_profile", True):
+            save_git_author_profile(git_name, git_email)
+
     return jsonify({"message": "Đã lưu cài đặt"})
+
+
+@app.route("/api/git/author", methods=["GET"])
+def api_get_git_author():
+    project_path = request.args.get("project_path", "").strip()
+    author = git_get_author(project_path)
+    saved = get_saved_git_authors()
+
+    # Find suggestions from known project histories
+    projects = load_projects()
+    paths = [p.get("path") for p in projects if p.get("path")]
+    suggestions = git_get_suggested_authors(paths)
+
+    return jsonify({
+        "author": author,
+        "saved_authors": saved,
+        "suggestions": suggestions,
+    })
+
+
+@app.route("/api/git/author", methods=["POST"])
+def api_set_git_author():
+    data = request.get_json(force=True) or {}
+    name = data.get("name", "").strip()
+    email = data.get("email", "").strip()
+    scope = data.get("scope", "global").strip()
+    project_path = data.get("project_path", "").strip()
+    save_profile = data.get("save_profile", True)
+
+    if not name or not email:
+        return jsonify({"error": "Tên và email không được để trống"}), 400
+
+    res = git_set_author(name, email, scope=scope, project_path=project_path)
+    if not res.get("success"):
+        return jsonify({"error": res.get("error", "Lỗi cấu hình Git")}), 400
+
+    if save_profile:
+        save_git_author_profile(name, email)
+
+    return jsonify({
+        "success": True,
+        "message": f"Đã cập nhật tác giả Git ({'Toàn hệ thống' if scope == 'global' else 'Dự án'})",
+        "author": git_get_author(project_path),
+        "saved_authors": get_saved_git_authors(),
+    })
+
+
+@app.route("/api/git/saved-authors", methods=["POST", "DELETE"])
+def api_manage_saved_authors():
+    data = request.get_json(force=True) or {}
+    if request.method == "POST":
+        name = data.get("name", "").strip()
+        email = data.get("email", "").strip()
+        if not name or not email:
+            return jsonify({"error": "Tên và email không được để trống"}), 400
+        saved = save_git_author_profile(name, email)
+        return jsonify({"success": True, "saved_authors": saved})
+    else:  # DELETE
+        email = data.get("email", "").strip()
+        if not email:
+            return jsonify({"error": "Thiếu email để xoá"}), 400
+        saved = delete_saved_git_author(email)
+        return jsonify({"success": True, "saved_authors": saved})
+
 
 
 @app.route("/api/settings/check-token", methods=["POST"])
@@ -842,11 +938,11 @@ def api_browse_file():
             filetypes = [("Android APK", "*.apk"), ("All Files", "*.*")]
             title = "Chọn file ứng dụng Android (.apk)"
         elif file_type == "bin":
-            filetypes = [("ESP32 GC9A01 Firmware BIN", "*.bin"), ("All Files", "*.*")]
-            title = "Chọn file Firmware ESP32 GC9A01 (.bin)"
+            filetypes = [("ESP32 Firmware BIN (*.bin)", "*.bin"), ("All Files", "*.*")]
+            title = "Chọn file Firmware ESP32 (.bin)"
         elif file_type == "oled_bin":
-            filetypes = [("ESP32 OLED Firmware BIN", "*.bin"), ("All Files", "*.*")]
-            title = "Chọn file Firmware ESP32 OLED (.bin)"
+            filetypes = [("ESP32 Firmware BIN (*.bin)", "*.bin"), ("All Files", "*.*")]
+            title = "Chọn file Firmware ESP32 phụ / tùy chọn (.bin)"
         else:
             filetypes = [("All Files", "*.*")]
             title = "Chọn file"
@@ -872,6 +968,7 @@ def api_ota_detect(project_id):
 
 
 @app.route("/api/projects/<project_id>/ota-release", methods=["POST"])
+@app.route("/api/projects/<project_id>/release-ota", methods=["POST"])
 def api_create_ota_release(project_id):
     """Release OTA assets (APK & BIN) and update version.json to Gitea/GitHub."""
     projects = load_projects()
@@ -886,16 +983,29 @@ def api_create_ota_release(project_id):
     apk_path = data.get("apk_path", "").strip()
     bin_path = data.get("bin_path", "").strip()
     oled_bin_path = data.get("oled_bin_path", "").strip()
+    extra_files = data.get("extra_files", []) or []
     app_ver_code = data.get("app_version_code", 1)
     fw_ver_code = data.get("fw_version_code", 1)
+    sync_nas = data.get("sync_nas", True)
+    build_apk = data.get("build_apk", True)
+    public_repo_url = (data.get("ota_public_repo_url") or data.get("public_repo_url") or project.get("ota_public_repo_url", "")).strip()
 
     if not tag_name:
         return jsonify({"error": "Thiếu Tag Name (ví dụ: v1.0.1)"}), 400
 
+    # Ghi nhớ ota_public_repo_url vào project settings nếu có thay đổi
+    if public_repo_url and project.get("ota_public_repo_url") != public_repo_url:
+        project["ota_public_repo_url"] = public_repo_url
+        for p in projects:
+            if p["id"] == project_id:
+                p["ota_public_repo_url"] = public_repo_url
+                break
+        save_projects(projects)
+
     logs = []
     local_path = project.get("path", "")
     
-    # 1. Stage ALL changes, write version.json, commit ALL files & create tag
+    # 1. Stage ALL changes, write version.json, commit ALL files & create tag (Repo 1 - Private)
     if local_path and is_git_repo(local_path):
         try:
             # Stage ALL modified/untracked files in repo
@@ -927,15 +1037,35 @@ def api_create_ota_release(project_id):
             with open(v_path, "w", encoding="utf-8") as f:
                 json.dump(version_data, f, ensure_ascii=False, indent=2)
             
-            # Tự động Build lại APK Android mang chính xác mã phiên bản mới
+            # Đồng bộ trực tiếp vào app/build.gradle.kts nếu có
             tymap_path = os.path.join(local_path, "TYMAP")
-            if os.path.exists(tymap_path):
+            gradle_file = os.path.join(tymap_path, "app", "build.gradle.kts")
+            if os.path.exists(gradle_file):
+                try:
+                    import re
+                    with open(gradle_file, "r", encoding="utf-8") as gf:
+                        g_content = gf.read()
+                    g_content = re.sub(r'versionCode\s*=\s*\d+', f'versionCode = {int(app_ver_code)}', g_content)
+                    g_content = re.sub(r'versionName\s*=\s*"[^"]+"', f'versionName = "{tag_name.lstrip("v")}"', g_content)
+                    with open(gradle_file, "w", encoding="utf-8") as gf:
+                        gf.write(g_content)
+                    logs.append(f"📝 Đã đồng bộ build.gradle.kts: versionCode = {app_ver_code}, versionName = \"{tag_name.lstrip('v')}\"")
+                except Exception as e_gradle:
+                    logs.append(f"⚠️ Không thể cập nhật build.gradle.kts: {e_gradle}")
+
+            # Tự động Build lại APK Android mang chính xác mã phiên bản mới (nếu bật tùy chọn)
+            if build_apk and os.path.exists(tymap_path):
                 logs.append(f"🔨 Đang tự động biên dịch Android APK cho phiên bản {tag_name}...")
                 gradle_cmd = "gradlew.bat assembleDebug" if sys.platform == "win32" else "./gradlew assembleDebug"
                 try:
                     res_gradle = subprocess.run(gradle_cmd, shell=True, cwd=tymap_path, capture_output=True, text=True)
                     if res_gradle.returncode == 0:
                         logs.append(f"✅ Đã build APK thành công với mã phiên bản {app_ver_code} ({tag_name})")
+                        # Tự động phát hiện file APK mới tạo nếu apk_path chưa có hoặc chưa tồn tại
+                        detected = find_release_assets(local_path)
+                        if detected.get("apk_path") and os.path.exists(detected["apk_path"]):
+                            apk_path = detected["apk_path"]
+                            logs.append(f"📦 Đã nhận diện APK mới tại: {apk_path}")
                     else:
                         logs.append(f"⚠️ Cảnh báo biên dịch APK: {res_gradle.stderr[:200] if res_gradle.stderr else res_gradle.stdout[:200]}")
                 except Exception as e_build:
@@ -946,23 +1076,85 @@ def api_create_ota_release(project_id):
             
             try:
                 git_commit(local_path, f"release({tag_name}): full update release including version.json")
-                logs.append(f"💾 Đã commit toàn bộ file dự án cho phiên bản {tag_name}")
+                logs.append(f"💾 Đã commit toàn bộ file dự án Repo 1 cho phiên bản {tag_name}")
             except Exception:
                 pass # If nothing to commit
 
             try:
                 git_tag_create(local_path, tag_name, f"Release {tag_name}")
-                logs.append(f"✅ Đã tạo Git Tag cục bộ: {tag_name}")
+                logs.append(f"✅ Đã tạo Git Tag cục bộ Repo 1: {tag_name}")
             except Exception:
                 pass
                 
             git_push(local_path)
             git_push_tag(local_path, tag_name)
-            logs.append(f"🚀 Đã push TOÀN BỘ file & Tag {tag_name} lên các Remote Git (Gitea/GitHub)")
+            logs.append(f"🚀 Đã push TOÀN BỘ file & Tag {tag_name} lên các Remote Git (Repo 1)")
         except Exception as e:
             logs.append(f"⚠️ Cảnh báo Git commit/push: {str(e)}")
 
     settings = load_settings()
+    github_token = get_token("github_token") or settings.get("github_token", "")
+
+    # 2. XỬ LÝ THEO KIẾN TRÚC 2 REPOSITORY (Nếu người dùng cung cấp URL Repo 2 OTA Public)
+    if public_repo_url:
+        try:
+            two_repo_res = publish_two_repo_ota(
+                project_path=local_path,
+                public_repo_url=public_repo_url,
+                tag_name=tag_name,
+                app_ver_code=int(app_ver_code),
+                fw_ver_code=int(fw_ver_code),
+                changelog=changelog,
+                apk_path=apk_path,
+                bin_path=bin_path,
+                oled_bin_path=oled_bin_path,
+                extra_files=extra_files,
+                github_token=github_token,
+            )
+            logs.extend(two_repo_res.get("logs", []))
+
+            # Sync sang NAS nếu bật
+            if sync_nas:
+                try:
+                    nas_ip = settings.get("nas_ip", "192.168.1.114")
+                    nas_user = settings.get("nas_user", "nas152")
+                    nas_pass = get_token("nas_password") or settings.get("nas_password", "271000")
+                    version_payload = {
+                        "app": {
+                            "versionCode": int(app_ver_code),
+                            "versionName": tag_name.lstrip("v"),
+                            "apkUrl": two_repo_res.get("apk_url", ""),
+                            "apkName": os.path.basename(apk_path) if apk_path else "",
+                            "changelog": changelog,
+                        },
+                        "firmware": {
+                            "versionCode": int(fw_ver_code),
+                            "versionName": tag_name.lstrip("v"),
+                            "binUrl": two_repo_res.get("bin_url", ""),
+                            "binName": os.path.basename(bin_path) if bin_path else "firmware.bin",
+                            "secondaryBinUrl": two_repo_res.get("oled_bin_url", ""),
+                            "oledBinUrl": two_repo_res.get("oled_bin_url", ""),
+                            "changelog": changelog,
+                        },
+                    }
+                    if sync_version_to_nas(version_payload, nas_ip=nas_ip, username=nas_user, password=nas_pass, apk_path=apk_path, bin_path=bin_path, oled_bin_path=oled_bin_path):
+                        logs.append("📡 Đã đồng bộ version.json & file nhị phân OTA sang máy chủ NAS")
+                except Exception as e_nas:
+                    logs.append(f"⚠️ Cảnh báo đồng bộ NAS: {e_nas}")
+
+            return jsonify({
+                "success": True,
+                "logs": logs,
+                "public_repo": two_repo_res.get("public_repo", ""),
+                "apk_url": two_repo_res.get("apk_url", ""),
+                "bin_url": two_repo_res.get("bin_url", ""),
+                "oled_bin_url": two_repo_res.get("oled_bin_url", ""),
+                "release_id": two_repo_res.get("release_id"),
+                "html_url": two_repo_res.get("html_url", ""),
+            })
+        except Exception as e_2repo:
+            logs.append(f"❌ Lỗi quy trình 2 Repo OTA: {str(e_2repo)}")
+            return jsonify({"success": False, "error": str(e_2repo), "logs": logs}), 500
     gitea_token = get_token("gitea_token") or settings.get("gitea_token", "")
     gitea_username = get_token("gitea_username") or settings.get("gitea_username", "") or "nas152"
     gitea_password = get_token("gitea_password") or settings.get("gitea_password", "") or "271000"
@@ -1015,10 +1207,15 @@ def api_create_ota_release(project_id):
             apk_path = detected["apk_path"]
         else:
             logs.append(f"⚠️ Không tìm thấy file APK tại: {apk_path}")
+    bin_filename = os.path.basename(bin_path) if bin_path else "firmware.bin"
+    oled_bin_filename = os.path.basename(oled_bin_path) if oled_bin_path else "firmware_secondary.bin"
+    if oled_bin_path and bin_path and bin_filename == oled_bin_filename:
+        oled_bin_filename = f"secondary_{oled_bin_filename}"
+
     if bin_path and not os.path.exists(bin_path):
-        logs.append(f"⚠️ Không tìm thấy file Firmware GC9A01 BIN tại: {bin_path}")
+        logs.append(f"⚠️ Không tìm thấy file Firmware BIN tại: {bin_path}")
     if oled_bin_path and not os.path.exists(oled_bin_path):
-        logs.append(f"⚠️ Không tìm thấy file Firmware OLED BIN tại: {oled_bin_path}")
+        logs.append(f"⚠️ Không tìm thấy file Firmware phụ BIN tại: {oled_bin_path}")
 
     # 2. Release on Gitea
     if gitea_auth and gitea_server:
@@ -1038,20 +1235,19 @@ def api_create_ota_release(project_id):
                 else:
                     logs.append(f"❌ Lỗi upload APK lên Gitea Release: {err or 'Lỗi không xác định'}")
             if bin_path and os.path.exists(bin_path):
-                asset, err = upload_gitea_asset(gitea_auth, gitea_server, owner, repo, rel_id, bin_path, custom_name="firmware.bin")
+                asset, err = upload_gitea_asset(gitea_auth, gitea_server, owner, repo, rel_id, bin_path, custom_name=bin_filename)
                 if asset:
                     gitea_bin_url = asset.get("browser_download_url", "")
-                    logs.append(f"📦 Đã đính kèm Firmware GC9A01 BIN lên Gitea Release: {gitea_bin_url}")
+                    logs.append(f"📦 Đã đính kèm Firmware BIN ({bin_filename}) lên Gitea Release: {gitea_bin_url}")
                 else:
-                    logs.append(f"❌ Lỗi upload Firmware GC9A01 BIN lên Gitea Release: {err or 'Lỗi không xác định'}")
+                    logs.append(f"❌ Lỗi upload Firmware BIN ({bin_filename}) lên Gitea Release: {err or 'Lỗi không xác định'}")
             if oled_bin_path and os.path.exists(oled_bin_path):
-                # Upload OLED bin with custom name firmware_oled.bin to avoid overwriting GC9A01 firmware.bin
-                asset, err = upload_gitea_asset(gitea_auth, gitea_server, owner, repo, rel_id, oled_bin_path, custom_name="firmware_oled.bin")
+                asset, err = upload_gitea_asset(gitea_auth, gitea_server, owner, repo, rel_id, oled_bin_path, custom_name=oled_bin_filename)
                 if asset:
                     gitea_oled_bin_url = asset.get("browser_download_url", "")
-                    logs.append(f"📦 Đã đính kèm Firmware OLED BIN lên Gitea Release: {gitea_oled_bin_url}")
+                    logs.append(f"📦 Đã đính kèm Firmware phụ BIN ({oled_bin_filename}) lên Gitea Release: {gitea_oled_bin_url}")
                 else:
-                    logs.append(f"❌ Lỗi upload Firmware OLED BIN lên Gitea Release: {err or 'Lỗi không xác định'}")
+                    logs.append(f"❌ Lỗi upload Firmware phụ BIN ({oled_bin_filename}) lên Gitea Release: {err or 'Lỗi không xác định'}")
         else:
             logs.append(f"⚠️ Không thể tạo/tìm Release trên Gitea cho repo {owner}/{repo}")
 
@@ -1071,19 +1267,30 @@ def api_create_ota_release(project_id):
                     else:
                         logs.append(f"❌ Lỗi upload APK lên GitHub Release: {err or 'Lỗi không xác định'}")
                 if bin_path and os.path.exists(bin_path):
-                    asset, err = upload_github_asset(github_token, owner, repo, rel_id, bin_path, custom_name="firmware.bin")
+                    asset, err = upload_github_asset(github_token, owner, repo, rel_id, bin_path, custom_name=bin_filename)
                     if asset:
                         github_bin_url = asset.get("browser_download_url", "")
-                        logs.append(f"📦 Đã upload Firmware GC9A01 BIN lên GitHub: {github_bin_url}")
+                        logs.append(f"📦 Đã upload Firmware BIN ({bin_filename}) lên GitHub: {github_bin_url}")
                     else:
-                        logs.append(f"❌ Lỗi upload Firmware GC9A01 BIN lên GitHub Release: {err or 'Lỗi không xác định'}")
+                        logs.append(f"❌ Lỗi upload Firmware BIN ({bin_filename}) lên GitHub Release: {err or 'Lỗi không xác định'}")
                 if oled_bin_path and os.path.exists(oled_bin_path):
-                    asset, err = upload_github_asset(github_token, owner, repo, rel_id, oled_bin_path, custom_name="firmware_oled.bin")
+                    asset, err = upload_github_asset(github_token, owner, repo, rel_id, oled_bin_path, custom_name=oled_bin_filename)
                     if asset:
                         github_oled_bin_url = asset.get("browser_download_url", "")
-                        logs.append(f"📦 Đã upload Firmware OLED BIN lên GitHub: {github_oled_bin_url}")
+                        logs.append(f"📦 Đã upload Firmware phụ BIN ({oled_bin_filename}) lên GitHub: {github_oled_bin_url}")
                     else:
-                        logs.append(f"❌ Lỗi upload Firmware OLED BIN lên GitHub Release: {err or 'Lỗi không xác định'}")
+                        logs.append(f"❌ Lỗi upload Firmware phụ BIN ({oled_bin_filename}) lên GitHub Release: {err or 'Lỗi không xác định'}")
+                if extra_files and isinstance(extra_files, list):
+                    for ef in extra_files:
+                        ef_p = ef.get("path", "").strip() if isinstance(ef, dict) else str(ef).strip()
+                        ef_lbl = ef.get("label", "").strip() if isinstance(ef, dict) else ""
+                        if ef_p and os.path.exists(ef_p):
+                            ef_name = os.path.basename(ef_p)
+                            asset, err = upload_github_asset(github_token, owner, repo, rel_id, ef_p, custom_name=ef_name)
+                            if asset:
+                                logs.append(f"📦 Đã upload file bổ sung ({ef_name} - {ef_lbl or 'Tùy chọn'}) lên GitHub: {asset.get('browser_download_url')}")
+                            else:
+                                logs.append(f"❌ Lỗi upload file bổ sung ({ef_name}) lên GitHub: {err or 'Lỗi'}")
             else:
                 logs.append(f"⚠️ Không thể tạo/tìm Release trên GitHub cho repo {owner}/{repo}")
 
@@ -1103,12 +1310,16 @@ def api_create_ota_release(project_id):
                 "versionCode": int(app_ver_code),
                 "versionName": tag_name.lstrip("v"),
                 "apkUrl": final_apk_url,
+                "apkName": os.path.basename(apk_path) if apk_path else "",
                 "changelog": changelog
             },
             "firmware": {
                 "versionCode": int(fw_ver_code),
                 "versionName": tag_name.lstrip("v"),
                 "binUrl": final_bin_url,
+                "binName": bin_filename if bin_path else "firmware.bin",
+                "secondaryBinUrl": final_oled_bin_url if oled_bin_path else "",
+                "secondaryBinName": oled_bin_filename if oled_bin_path else "",
                 "oledBinUrl": final_oled_bin_url,
                 "changelog": changelog
             },
@@ -1116,9 +1327,21 @@ def api_create_ota_release(project_id):
                 "versionCode": int(fw_ver_code),
                 "versionName": tag_name.lstrip("v"),
                 "binUrl": final_oled_bin_url,
+                "binName": oled_bin_filename if oled_bin_path else "firmware_oled.bin",
                 "changelog": changelog
-            }
+            },
+            "assets": []
         }
+        if extra_files and isinstance(extra_files, list):
+            for ef in extra_files:
+                ef_p = ef.get("path", "").strip() if isinstance(ef, dict) else str(ef).strip()
+                ef_lbl = ef.get("label", "").strip() if isinstance(ef, dict) else ""
+                if ef_p and os.path.exists(ef_p):
+                    version_data["assets"].append({
+                        "name": os.path.basename(ef_p),
+                        "label": ef_lbl or os.path.basename(ef_p),
+                        "path": ef_p
+                    })
         v_path = os.path.join(local_path, "version.json")
         with open(v_path, "w", encoding="utf-8") as f:
             json.dump(version_data, f, ensure_ascii=False, indent=2)
@@ -1132,12 +1355,18 @@ def api_create_ota_release(project_id):
         except Exception:
             pass
 
-        # Sync version.json và toàn bộ file APK/BIN trực tiếp sang NAS Fusion Engine
-        try:
-            if sync_version_to_nas(version_data, apk_path=apk_path, bin_path=bin_path, oled_bin_path=oled_bin_path):
-                logs.append("📡 Đã đồng bộ version.json & file nhị phân OTA sang máy chủ NAS (https://alert.nas152.duckdns.org)")
-        except Exception as e:
-            logs.append(f"⚠️ Cảnh báo đồng bộ NAS: {e}")
+        # Sync version.json và toàn bộ file APK/BIN trực tiếp sang NAS Fusion Engine nếu bật
+        if sync_nas:
+            try:
+                nas_ip = settings.get("nas_ip", "192.168.1.114")
+                nas_user = settings.get("nas_user", "nas152")
+                nas_pass = get_token("nas_password") or settings.get("nas_password", "271000")
+                if sync_version_to_nas(version_data, nas_ip=nas_ip, username=nas_user, password=nas_pass, apk_path=apk_path, bin_path=bin_path, oled_bin_path=oled_bin_path):
+                    logs.append("📡 Đã đồng bộ version.json & file nhị phân OTA sang máy chủ NAS (https://alert.nas152.duckdns.org)")
+            except Exception as e:
+                logs.append(f"⚠️ Cảnh báo đồng bộ NAS: {e}")
+        else:
+            logs.append("ℹ️ Đã bỏ qua bước đồng bộ trực tiếp lên máy chủ NAS theo tùy chọn người dùng.")
 
     return jsonify({"success": True, "logs": logs, "apk_url": final_apk_url, "bin_url": final_bin_url, "oled_bin_url": final_oled_bin_url})
 
