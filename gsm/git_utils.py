@@ -177,28 +177,50 @@ def open_in_fork(fork_path: str, project_path: str) -> None:
 def setup_multi_push(project_path: str, github_url: str, gitea_url: str) -> list[str]:
     lines = []
     if not is_git_repo(project_path): raise RuntimeError("Not a git repository")
-    r_remotes = _run_git(["remote"], cwd=project_path)
-    remotes = [l.strip() for l in r_remotes.stdout.splitlines() if l.strip()] if r_remotes.returncode == 0 else []
 
-    if "origin" in remotes:
-        _run_git(["remote", "set-url", "origin", github_url], cwd=project_path)
-        lines.append(f"Updated remote origin -> {github_url}")
-    else:
-        _run_git(["remote", "add", "origin", github_url], cwd=project_path)
-        lines.append(f"Added remote origin -> {github_url}")
+    # Clean and authenticate github url with token if available
+    try:
+        from .storage import get_token
+        token = get_token("github_token")
+    except Exception:
+        token = None
 
-    if "gitea" in remotes:
-        _run_git(["remote", "set-url", "gitea", gitea_url], cwd=project_path)
-        lines.append(f"Updated remote gitea -> {gitea_url}")
+    clean_github_url = github_url
+    if "@" in github_url and "github.com" in github_url:
+        clean_github_url = "https://" + github_url.split("@")[-1]
+
+    auth_github_url = clean_github_url
+    if token and "github.com" in clean_github_url and not clean_github_url.startswith(f"https://{token}@"):
+        auth_github_url = clean_github_url.replace("https://", f"https://{token}@")
+
+    r = _run_git(["remote", "get-url", "origin"], cwd=project_path)
+    if r.returncode != 0:
+        _run_git(["remote", "add", "origin", clean_github_url], cwd=project_path)
+        lines.append(f"Added remote origin -> {clean_github_url}")
     else:
+        _run_git(["remote", "set-url", "origin", clean_github_url], cwd=project_path)
+        lines.append(f"Updated remote origin -> {clean_github_url}")
+
+    r = _run_git(["remote", "get-url", "gitea"], cwd=project_path)
+    if r.returncode != 0:
         _run_git(["remote", "add", "gitea", gitea_url], cwd=project_path)
         lines.append(f"Added remote gitea -> {gitea_url}")
-    r = _run_git(["remote", "get-url", "--push", "origin"], cwd=project_path)
-    if r.returncode == 0:
-        for u in [u.strip() for u in r.stdout.strip().splitlines() if u.strip()]:
-            if u != github_url: _run_git(["remote", "set-url", "--delete", "--push", "origin", u], cwd=project_path)
+    else:
+        _run_git(["remote", "set-url", "gitea", gitea_url], cwd=project_path)
+        lines.append(f"Updated remote gitea -> {gitea_url}")
+
+    r = _run_git(["remote", "get-url", "github"], cwd=project_path)
+    if r.returncode != 0:
+        _run_git(["remote", "add", "github", auth_github_url], cwd=project_path)
+    else:
+        _run_git(["remote", "set-url", "github", auth_github_url], cwd=project_path)
+
+    # Configure multi-push on origin: both GitHub and Gitea
+    _run_git(["config", "--unset-all", "remote.origin.pushurl"], cwd=project_path)
+    _run_git(["remote", "set-url", "--add", "--push", "origin", auth_github_url], cwd=project_path)
     _run_git(["remote", "set-url", "--add", "--push", "origin", gitea_url], cwd=project_path)
-    lines.append("Multi-push configured")
+    lines.append("Multi-push configured: origin -> GitHub & Gitea")
+
     r = _run_git(["remote", "-v"], cwd=project_path)
     lines.extend([l.strip() for l in r.stdout.strip().splitlines() if l.strip()])
     return lines

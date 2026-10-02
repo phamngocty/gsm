@@ -709,6 +709,25 @@ class TestRemoteCreationFixes(unittest.TestCase):
         # Verify fallback set-url was called
         self.assertEqual(mock_lines.call_count, 2)
 
+    @patch("gsm.git_utils._run_git")
+    @patch("gsm.git_utils.is_git_repo")
+    @patch("gsm.storage.get_token")
+    def test_setup_multi_push_configures_both_urls(self, mock_token, mock_is_git, mock_run):
+        from gsm.git_utils import setup_multi_push
+        mock_is_git.return_value = True
+        mock_token.return_value = "fake_token_123"
+        mock_run.return_value = MagicMock(returncode=0, stdout="")
+
+        setup_multi_push("/fake/path", "https://github.com/user/repo.git", "http://gitea.local/repo.git")
+
+        calls = [c[0][0] for c in mock_run.call_args_list]
+        # Must unset all previous pushurls
+        self.assertIn(["config", "--unset-all", "remote.origin.pushurl"], calls)
+        # Must add GitHub pushurl with token
+        self.assertIn(["remote", "set-url", "--add", "--push", "origin", "https://fake_token_123@github.com/user/repo.git"], calls)
+        # Must add Gitea pushurl
+        self.assertIn(["remote", "set-url", "--add", "--push", "origin", "http://gitea.local/repo.git"], calls)
+
 
 if __name__ == "__main__":
     unittest.main()

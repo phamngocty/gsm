@@ -19,7 +19,7 @@ from gsm.storage import (
 )
 from gsm.git_utils import (
     is_git_repo, get_status, get_recent_commits, clone_repo,
-    open_in_fork, setup_multi_push,
+    open_in_fork, setup_multi_push, has_multi_push,
     git_init, git_stage_file, git_unstage_file, git_stage_all, git_stage_all_progress,
     git_commit, git_push, git_push_all, git_pull, git_fetch, git_push_tag, git_unlock, git_check_index_lock,
     git_branch_list, git_branch_create, git_branch_delete, git_branch_switch, git_branch_rename,
@@ -447,12 +447,27 @@ def api_git_command(project_id, cmd):
     path = project["path"]
     data = request.get_json(silent=True) or {}
 
+    def _do_push():
+        remote = data.get("remote", "origin")
+        if remote == "origin":
+            gh = project.get("github_remote", "")
+            gt = project.get("gitea_remote", "")
+            if not gh or not gt:
+                for rm in git_remote_list(path):
+                    u = rm.get("url", "")
+                    if "github.com" in u and not gh: gh = u
+                    elif ("gitea" in u or ":3002" in u or "nas152" in u) and not gt: gt = u
+            if gh and gt and not has_multi_push(path):
+                try: setup_multi_push(path, gh, gt)
+                except Exception as e_mp: log.warning(f"Auto setup_multi_push error in push: {e_mp}")
+        return _git_result(git_push(path, remote, data.get("branch", ""), data.get("force", False)))
+
     cmd_map = {
         "stage_file":    lambda: _git_result(git_stage_file(path, data.get("file", ""))),
         "unstage_file":  lambda: _git_result(git_unstage_file(path, data.get("file", ""))),
         "stage_all":     lambda: _git_result(git_stage_all(path)),
         "commit":        lambda: _git_result(git_commit(path, data.get("message", ""))),
-        "push":          lambda: _git_result(git_push(path, data.get("remote", "origin"), data.get("branch", ""), data.get("force", False))),
+        "push":          _do_push,
         "push_all":      lambda: _git_result(git_push_all(path, data.get("force", False))),
         "pull":          lambda: _git_result(git_pull(path, data.get("remote", "origin"), data.get("branch", ""))),
         "fetch":         lambda: _git_result(git_fetch(path, data.get("remote", ""))),
@@ -646,8 +661,14 @@ def api_create_remote(project_id):
     projects = load_projects()
     for p in projects:
         if p["id"] == project_id:
-            if platform == "github": p["github_remote"] = clone_url
-            elif platform == "gitea": p["gitea_remote"] = clone_url
+            if platform == "github":
+                p["github_remote"] = clone_url
+                if origin_remote and ("gitea" in origin_remote["url"].lower() or "3002" in origin_remote["url"] or "nas152" in origin_remote["url"].lower() or "192.168." in origin_remote["url"]):
+                    p["gitea_remote"] = origin_remote["url"]
+            elif platform == "gitea":
+                p["gitea_remote"] = clone_url
+                if origin_remote and "github" in origin_remote["url"].lower():
+                    p["github_remote"] = origin_remote["url"]
             break
     save_projects(projects)
 
