@@ -107,13 +107,14 @@ Toàn bộ giao diện được điều khiển bởi ứng dụng Vue 3 với D
 | Tên Component | Loại (Tag/Type) | Vue Binding (v-model / event) | Chức năng chi tiết |
 | :--- | :--- | :--- | :--- |
 | **Ô tìm kiếm repo** | `<input type="text">` | `v-model="searchQuery"`, `@input="filterProjects"` | Tìm kiếm dự án local theo tên hoặc đường dẫn |
+| **Nút Kết nối GitHub**| `<button class="btn-sm">`| `@click="openSettingsTab('services')"` | Hiển thị trạng thái token & mở thẳng form kết nối GitHub |
 | **Nút Refresh All** | `<button class="btn-icon">` | `@click="refreshAll"` | Làm mới toàn bộ danh sách repo và trạng thái git |
 | **Nút Mở Settings** | `<button class="btn-icon">` | `@click="openSettings"` | Mở cửa sổ cấu hình hệ thống |
 | **Nút Tab Trang chủ** | `<button class="nav-btn">` | `@click="goHome"`, `:class="{ active: navTab === 'home' }"` | Quay về Dashboard chính |
 | **Nút Tab Clone** | `<button class="nav-btn">` | `@click="navTab = 'clone'"` | Mở màn hình Clone repository |
 | **Nút Tab Tạo Repo** | `<button class="nav-btn">` | `@click="navTab = 'create'"` | Mở màn hình Khởi tạo repo mới |
 | **Nút Tab Kho Gitea** | `<button class="nav-btn">` | `@click="navTab = 'gitea_browse'"` | Duyệt danh sách repo trên Gitea Server |
-| **Nút Tab Kho GitHub** | `<button class="nav-btn">` | `@click="navTab = 'github_browse'"` | Duyệt danh sách repo trên tài khoản GitHub |
+| **Nút Tab Kho GitHub** | `<button class="nav-btn">` | `@click="navTab = 'github_browse'"` | Duyệt danh sách repo trên tài khoản GitHub (có nút kết nối nhanh) |
 
 #### 4.2 Workspace & Action Bar (Khi chọn 1 dự án Git)
 | Tên Component | Loại (Tag/Type) | Vue Binding (v-model / event) | Chức năng chi tiết |
@@ -123,7 +124,9 @@ Toàn bộ giao diện được điều khiển bởi ứng dụng Vue 3 với D
 | **Tab Sơ Đồ Nhánh** | `<button class="pm-tab-btn">` | `projectMainTab = 'branches'` | Quản lý nhánh trực quan (Local vs Remote) |
 | **Tab Releases & OTA** | `<button class="pm-tab-btn">` | `projectMainTab = 'releases'` | Quản lý Tag, GitHub/Gitea Release & Firmware OTA |
 | **Nút Pull (Kéo về)** | `<button class="abtn">` | `@click="executePull"`, `:disabled="syncing"` | Chạy `git pull` |
-| **Nút Push (Đẩy lên)** | `<button class="abtn">` | `@click="executePush"`, `:disabled="syncing"` | Chạy `git push` |
+| **Nút Push (Đẩy lên)** | `<button class="abtn">` | `@click="executePush()"`, `:disabled="syncing"` | Chạy `git push` nhánh hiện tại |
+| **Nút Tải Lên Tất Cả** | `<button class="abtn abtn-success">`| `@click="executePushAll"`, `:disabled="syncing"` | Tự động Stage all, Commit & Push lên toàn bộ Remote (GitHub / Gitea) |
+| **Nút Kết Nối GitHub Remote**| `<button class="btn-xs">`| `@click="createAndPushRemote('github')"` | Tạo repository trên GitHub và kết nối remote cho dự án |
 | **Nút Mở Fork App** | `<button class="btn">` | `@click="openInFork"`, `:disabled="!settings.fork_path"` | Mở dự án trong ứng dụng Fork Git Client |
 | **Nút Mở Stash / Cất giữ** | `<button class="abtn">` | `@click="executeStashPush"` | Chạy `git stash push` |
 | **Nút Khôi phục (Reset)** | `<button class="abtn-danger">` | `@click="showResetPanel = !showResetPanel"` | Mở panel Soft/Mixed/Hard Reset & Revert |
@@ -211,3 +214,13 @@ Toàn bộ giao diện được điều khiển bởi ứng dụng Vue 3 với D
 | **Nút Xuất Bản OTA** | `<button class="btn-primary">`| `@click="submitOtaRelease"`, `:disabled="otaLoading"` | Đẩy Release sang GitHub + Gitea + NAS (hoặc Repo 2 Public) |
 | **Tab Hướng Dẫn & Code Mẫu**| Subtab Navigation | `otaSubTab = 'guide'` | Mã nguồn C++ WiFi OTA, BLE OTA, Android Kotlin In-App Update mẫu |
 | **Tab AI Prompt Tạo Dự Án Mới**| Subtab Navigation | `otaSubTab = 'prompt'` | Prompt động phổ quát để copy đưa cho mọi AI Agent xây dựng OTA cho dự án mới |
+
+#### 4.9 Khối Quản lý Remote & Đẩy Lên Tất Cả (Multi-Push & Remote Management)
+| Tên Component | Loại (Tag/Type) | Vue Binding (v-model / event) | Chức năng chi tiết |
+| :--- | :--- | :--- | :--- |
+| **Nút Tạo Repo GitHub (Header)**| `<button class="btn btn-primary">` | `v-if="!hasGithubRemote"`, `@click="openCreateRemoteModal('github')"` | Mở modal tạo kho lưu trữ GitHub và tự động kết nối dự án |
+| **Nút Đẩy Lên Tất Cả (Action Bar)**| `<button class="abtn">` | `@click="executePushAll"`, `:disabled="syncing"` | Đẩy toàn bộ nhánh (`--all`) và tags (`--tags`) lên tất cả Remotes (GitHub, Gitea/NAS) |
+| **Nút Tạo Repo GitHub (Remote Section)**| `<button class="btn btn-primary btn-xs">` | `v-if="!hasGithubRemote"`, `@click="openCreateRemoteModal('github')"` | Tạo repository GitHub trực tiếp tại khu vực Remote |
+| **Nút Tạo Repo Gitea (Remote Section)**| `<button class="btn btn-secondary btn-xs">` | `v-if="!hasGiteaRemote"`, `@click="openCreateRemoteModal('gitea')"` | Tạo repository Gitea trên máy chủ NAS |
+| **Nút Thêm Remote Thủ Công**| `<button class="btn btn-secondary btn-xs">` | `@click="showAddRemoteInput = !showAddRemoteInput"` | Bật/tắt hàng nhập URL & tên remote tùy chỉnh |
+| **Modal Tạo Remote (create_remote_modal.html)**| `<div class="modal-overlay">` | `:class="{ visible: showCreateRemoteModal }"` | Hộp thoại cấu hình tên repo, mô tả, chế độ riêng tư (private) và tự động push sau khi tạo |

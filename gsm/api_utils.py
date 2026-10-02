@@ -59,6 +59,27 @@ def create_github_repo(token: str, name: str, description: str = "", private: bo
         )
         if resp.status_code in (200, 201):
             return resp.json().get("clone_url")
+
+        # If repo already exists on GitHub (HTTP 422), retrieve its clone URL to link
+        if resp.status_code == 422:
+            try:
+                user_res = requests.get(
+                    "https://api.github.com/user",
+                    headers={"Authorization": f"Bearer {token}", "Accept": "application/vnd.github.v3+json"},
+                    timeout=10,
+                )
+                if user_res.status_code == 200:
+                    username = user_res.json().get("login")
+                    if username:
+                        repo_res = requests.get(
+                            f"https://api.github.com/repos/{username}/{name}",
+                            headers={"Authorization": f"Bearer {token}", "Accept": "application/vnd.github.v3+json"},
+                            timeout=10,
+                        )
+                        if repo_res.status_code == 200:
+                            return repo_res.json().get("clone_url")
+            except Exception:
+                pass
         return None
     except requests.RequestException:
         return None
@@ -75,6 +96,27 @@ def create_gitea_repo(token: str, server_url: str, name: str, description: str =
         )
         if resp.status_code in (200, 201):
             return resp.json().get("clone_url")
+
+        # If repo already exists on Gitea (HTTP 409 or 422), retrieve its clone URL
+        if resp.status_code in (409, 422):
+            try:
+                user_res = requests.get(
+                    f"{server_url}/api/v1/user",
+                    headers={"Authorization": f"token {token}"},
+                    timeout=10,
+                )
+                if user_res.status_code == 200:
+                    username = user_res.json().get("username")
+                    if username:
+                        repo_res = requests.get(
+                            f"{server_url}/api/v1/repos/{username}/{name}",
+                            headers={"Authorization": f"token {token}"},
+                            timeout=10,
+                        )
+                        if repo_res.status_code == 200:
+                            return repo_res.json().get("clone_url")
+            except Exception:
+                pass
         return None
     except requests.RequestException:
         return None

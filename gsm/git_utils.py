@@ -177,20 +177,22 @@ def open_in_fork(fork_path: str, project_path: str) -> None:
 def setup_multi_push(project_path: str, github_url: str, gitea_url: str) -> list[str]:
     lines = []
     if not is_git_repo(project_path): raise RuntimeError("Not a git repository")
-    r = _run_git(["remote", "get-url", "origin"], cwd=project_path)
-    if r.returncode != 0:
-        _run_git(["remote", "add", "origin", github_url], cwd=project_path)
-        lines.append(f"Added remote origin -> {github_url}")
-    else:
+    r_remotes = _run_git(["remote"], cwd=project_path)
+    remotes = [l.strip() for l in r_remotes.stdout.splitlines() if l.strip()] if r_remotes.returncode == 0 else []
+
+    if "origin" in remotes:
         _run_git(["remote", "set-url", "origin", github_url], cwd=project_path)
         lines.append(f"Updated remote origin -> {github_url}")
-    r = _run_git(["remote", "get-url", "gitea"], cwd=project_path)
-    if r.returncode != 0:
-        _run_git(["remote", "add", "gitea", gitea_url], cwd=project_path)
-        lines.append(f"Added remote gitea -> {gitea_url}")
     else:
+        _run_git(["remote", "add", "origin", github_url], cwd=project_path)
+        lines.append(f"Added remote origin -> {github_url}")
+
+    if "gitea" in remotes:
         _run_git(["remote", "set-url", "gitea", gitea_url], cwd=project_path)
         lines.append(f"Updated remote gitea -> {gitea_url}")
+    else:
+        _run_git(["remote", "add", "gitea", gitea_url], cwd=project_path)
+        lines.append(f"Added remote gitea -> {gitea_url}")
     r = _run_git(["remote", "get-url", "--push", "origin"], cwd=project_path)
     if r.returncode == 0:
         for u in [u.strip() for u in r.stdout.strip().splitlines() if u.strip()]:
@@ -410,6 +412,63 @@ def git_push(project_path: str, remote: str = "origin", branch: str = "", force:
     return result
 
 
+def git_push_all(project_path: str, force: bool = False) -> dict:
+    """Push all branches and all tags to all configured remotes."""
+    _auto_clean_stale_lock(project_path)
+    results = []
+    all_success = True
+
+    # Get list of unique remotes
+    remotes_res = _run_git(["remote"], cwd=project_path)
+    remotes = [r.strip() for r in remotes_res.stdout.splitlines() if r.strip()]
+    if not remotes:
+        return {"success": False, "error": "Chưa có remote nào được cấu hình trong dự án."}
+
+    # Ensure origin is pushed first if present
+    if "origin" in remotes:
+        remotes.remove("origin")
+        remotes.insert(0, "origin")
+
+    for remote_name in remotes:
+        # 1. Push all branches
+        args_all = ["push", "--all"]
+        if force:
+            args_all.append("--force")
+        args_all.append(remote_name)
+        res_branches = _run_git_lines(args_all, cwd=project_path)
+
+        # 2. Push all tags
+        args_tags = ["push", "--tags"]
+        if force:
+            args_tags.append("--force")
+        args_tags.append(remote_name)
+        res_tags = _run_git_lines(args_tags, cwd=project_path)
+
+        remote_success = res_branches.get("success", False) and res_tags.get("success", False)
+        if not remote_success:
+            all_success = False
+
+        combined_msg = []
+        if res_branches.get("stdout"): combined_msg.append(res_branches["stdout"])
+        if res_branches.get("stderr"): combined_msg.append(res_branches["stderr"])
+        if res_tags.get("stdout"): combined_msg.append(res_tags["stdout"])
+        if res_tags.get("stderr"): combined_msg.append(res_tags["stderr"])
+
+        results.append({
+            "remote": remote_name,
+            "success": remote_success,
+            "message": "\n".join(combined_msg).strip()
+        })
+
+    full_output = "\n".join([f"[{r['remote']}] {'✅' if r['success'] else '❌'}\n{r['message']}" for r in results])
+    return {
+        "success": all_success,
+        "message": "Đã đẩy thành công tất cả nhánh và tags lên tất cả remotes!" if all_success else "Một số remote gặp lỗi khi đẩy lên.",
+        "stdout": full_output,
+        "results": results
+    }
+
+
 def git_pull(project_path: str, remote: str = "origin", branch: str = "") -> dict:
     _auto_clean_stale_lock(project_path)
     args = ["pull", remote]
@@ -571,8 +630,20 @@ def git_remote_list(project_path: str) -> list[dict]:
     return result
 
 
+def git_set_or_add_remote(project_path: str, name: str, url: str) -> dict:
+    """Set remote URL if it exists, otherwise add it. Safe against 'remote already exists'."""
+    r_check = _run_git(["remote"], cwd=project_path)
+    existing_names = [line.strip() for line in r_check.stdout.splitlines() if line.strip()] if r_check.returncode == 0 else []
+    if name in existing_names:
+        return _run_git_lines(["remote", "set-url", name, url], cwd=project_path)
+    r = _run_git_lines(["remote", "add", name, url], cwd=project_path)
+    if not r.get("success") and "already exists" in (r.get("stderr", "") + r.get("error", "")):
+        return _run_git_lines(["remote", "set-url", name, url], cwd=project_path)
+    return r
+
+
 def git_remote_add(project_path: str, name: str, url: str) -> dict:
-    return _run_git_lines(["remote", "add", name, url], cwd=project_path)
+    return git_set_or_add_remote(project_path, name, url)
 
 
 def git_remote_remove(project_path: str, name: str) -> dict:

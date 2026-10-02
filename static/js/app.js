@@ -213,10 +213,33 @@ const app = createApp({
         const newRemoteName = ref('origin');
         const newRemoteUrl = ref('');
         const creatingRemote = ref(null);
+        const showAddRemoteInput = ref(false);
+        const showCreateRemoteModal = ref(false);
+        const createRemotePlatform = ref('github');
+        const createRemoteName = ref('');
+        const createRemoteDesc = ref('');
+        const createRemotePrivate = ref(false);
+        const createRemotePushNow = ref(true);
+        const creatingRemoteLoading = ref(false);
+
         const remoteMap = computed(() => {
             const map = {};
             for (const r of remotes.value) { if (!map[r.name]) map[r.name] = r.url; }
             return map;
+        });
+
+        const hasGithubRemote = computed(() => {
+            if (selectedProject.value && selectedProject.value.github_remote) return true;
+            return remotes.value.some(r => r.url && r.url.toLowerCase().includes('github.com'));
+        });
+
+        const hasGiteaRemote = computed(() => {
+            if (selectedProject.value && selectedProject.value.gitea_remote) return true;
+            return remotes.value.some(r => r.url && (
+                r.url.toLowerCase().includes('gitea') ||
+                r.url.includes(':3002') ||
+                r.url.toLowerCase().includes('nas152')
+            ));
         });
 
         // Init
@@ -1394,6 +1417,32 @@ const app = createApp({
             } catch (e) { syncResult.value = { success: false, message: e.message }; }
             finally { syncing.value = null; }
         }
+        async function executePushAll() {
+            if (!selectedProject.value) return;
+            if (!confirm('🚀 Bạn có chắc muốn ĐẨY LÊN TẤT CẢ?\n\n• Đẩy toàn bộ nhánh (all branches)\n• Đẩy toàn bộ thẻ phát hành (all tags)\n• Đồng bộ lên tất cả các kho (GitHub và Gitea / NAS).')) return;
+            syncing.value = 'push_all';
+            syncResult.value = null;
+            toast('⏳ Đang đồng bộ và đẩy tất cả lên GitHub & Gitea/NAS...', 'info');
+            try {
+                const resp = await api(`/api/projects/${selectedProject.value.id}/push-all`, {
+                    method: 'POST',
+                    body: JSON.stringify({ force: false })
+                });
+                syncResult.value = resp;
+                if (resp.success) {
+                    toast(resp.message || '✅ Đẩy lên tất cả kho lưu trữ thành công!', 'success');
+                    await refreshStatus();
+                    await refreshLog();
+                } else {
+                    toast(resp.error || 'Đẩy lên thất bại', 'error');
+                }
+            } catch (e) {
+                syncResult.value = { success: false, message: e.message };
+                toast(e.message, 'error');
+            } finally {
+                syncing.value = null;
+            }
+        }
         async function executePull() {
             syncing.value = 'pull';
             syncResult.value = null;
@@ -1451,6 +1500,18 @@ const app = createApp({
         }
         async function createAndPushRemote(platform) {
             if (!selectedProject.value) return;
+            if (platform === 'github' && !settings.value.has_github_token) {
+                if (confirm('⚠️ Bạn chưa lưu GitHub Token (PAT) trong Cài đặt.\n\nNhấn OK để mở màn hình Cài đặt và nhập Token ngay.')) {
+                    openSettingsTab('services');
+                }
+                return;
+            }
+            if (platform === 'both' && !settings.value.has_github_token && !settings.value.has_gitea_token) {
+                if (confirm('⚠️ Bạn chưa cấu hình Token cho GitHub hoặc Gitea.\n\nNhấn OK để mở trang Cài đặt.')) {
+                    openSettingsTab('services');
+                }
+                return;
+            }
             creatingRemote.value = platform;
             try {
                 const d = await api(`/api/projects/${selectedProject.value.id}/create-remote`, { method: 'POST', body: JSON.stringify({ platform, private: false, description: selectedProject.value.name }) });
@@ -1470,6 +1531,53 @@ const app = createApp({
                 else toast(d.error || 'Thất bại', 'error');
             } catch (e) { toast(e.message, 'error'); }
             finally { creatingRemote.value = null; }
+        }
+
+        function openCreateRemoteModal(platform = 'github') {
+            if (!selectedProject.value) return;
+            createRemotePlatform.value = platform;
+            createRemoteName.value = selectedProject.value.name || '';
+            createRemoteDesc.value = selectedProject.value.description || selectedProject.value.name || '';
+            createRemotePrivate.value = false;
+            createRemotePushNow.value = true;
+            creatingRemoteLoading.value = false;
+            showCreateRemoteModal.value = true;
+        }
+
+        async function submitCreateRemote() {
+            if (!selectedProject.value) return;
+            const name = createRemoteName.value.trim();
+            if (!name) {
+                toast('Vui lòng nhập tên repository', 'error');
+                return;
+            }
+            creatingRemoteLoading.value = true;
+            try {
+                const resp = await api(`/api/projects/${selectedProject.value.id}/create-remote`, {
+                    method: 'POST',
+                    body: JSON.stringify({
+                        platform: createRemotePlatform.value,
+                        name: name,
+                        description: createRemoteDesc.value.trim(),
+                        private: createRemotePrivate.value,
+                        push_now: createRemotePushNow.value
+                    })
+                });
+                if (resp.success) {
+                    toast(resp.message || '✅ Đã tạo repository và kết nối thành công!', 'success');
+                    showCreateRemoteModal.value = false;
+                    const rs = await gitCmd(selectedProject.value.id, 'remote_list');
+                    remotes.value = Array.isArray(rs) ? rs : [];
+                    await loadProjects();
+                    await refreshStatus();
+                } else {
+                    toast(resp.error || 'Tạo repository thất bại', 'error');
+                }
+            } catch (e) {
+                toast(e.message || 'Lỗi khi tạo remote', 'error');
+            } finally {
+                creatingRemoteLoading.value = false;
+            }
         }
 
         // ── Fork / Delete / PR / Blame / Rebase ──
@@ -1532,6 +1640,10 @@ const app = createApp({
 
         // ── Settings ──
         function openSettings() { showAddModal.value = false; showSettingsModal.value = true; tokenResults.value = { github: null, gitea: null, password: null }; }
+        function openSettingsTab(tab = 'services') {
+            openSettings();
+            settingsTab.value = tab;
+        }
         function closeSettings() { showSettingsModal.value = false; }
         async function checkToken(platform) {
             const token = platform === 'github' ? formSettings.value.github_token : formSettings.value.gitea_token;
@@ -2126,13 +2238,15 @@ Hãy viết mã nguồn chi tiết, đầy đủ, chia thành các file rõ ràn
             refreshAll, refreshStatus, refreshLog, refreshBranches,
             stageFile, unstageFile, toggleStage, stageAll, unstageAll, viewDiff,
             executeCommit, createBranch, switchBranch, deleteBranch,
-            executePush, executePull, executeFetch, executeStashPush,
+            executePush, executePushAll, executePull, executeFetch, executeStashPush,
             addRemote, updateRemoteUrl, removeRemoteByName, createAndPushRemote,
+            showAddRemoteInput, showCreateRemoteModal, createRemotePlatform, createRemoteName, createRemoteDesc, createRemotePrivate, createRemotePushNow, creatingRemoteLoading, hasGithubRemote, hasGiteaRemote,
+            openCreateRemoteModal, submitCreateRemote,
             openInFork, deleteProject, createPullRequest, blameFile, rebaseBranch,
             submitClone, submitCreate,
             openGiteaTab, fetchGiteaRepos, importGiteaRepo, cloneGiteaRepo, fetchDashboardGiteaRepos,
             initGitRepo,
-            openSettings, closeSettings, checkToken, checkGiteaPassword, saveSettings,
+            openSettings, openSettingsTab, closeSettings, checkToken, checkGiteaPassword, saveSettings,
             openAddModal, closeAddModal, browseDir, browseFile,
             toast,
         };

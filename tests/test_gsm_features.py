@@ -614,6 +614,102 @@ class TestTwoRepoOtaDistribution(unittest.TestCase):
             shutil.rmtree(temp_dir, ignore_errors=True)
 
 
+class TestPushAllFeature(unittest.TestCase):
+
+    @patch("gsm.git_utils._run_git_lines")
+    @patch("gsm.git_utils._run_git")
+    def test_git_push_all(self, mock_run, mock_lines):
+        from gsm.git_utils import git_push_all
+        # mock git remote listing
+        mock_run.return_value = MagicMock(returncode=0, stdout="origin\ngitea\n")
+        mock_lines.return_value = {"success": True, "stdout": "Everything up-to-date", "stderr": ""}
+
+        res = git_push_all("/fake/path")
+        self.assertTrue(res["success"])
+        self.assertEqual(len(res["results"]), 2)
+        self.assertEqual(res["results"][0]["remote"], "origin")
+        self.assertEqual(res["results"][1]["remote"], "gitea")
+
+    @patch("app.git_remote_list")
+    @patch("app.git_push_all")
+    @patch("app._find_project")
+    @patch("app.is_git_repo")
+    @patch("os.path.isdir")
+    def test_api_push_all(self, mock_isdir, mock_is_git, mock_find, mock_push_all, mock_remote_list):
+        import app
+        mock_find.return_value = {"id": "p1", "path": "/fake/path", "name": "Fake"}
+        mock_isdir.return_value = True
+        mock_is_git.return_value = True
+        mock_remote_list.return_value = []
+        mock_push_all.return_value = {"success": True, "message": "OK", "results": []}
+
+        client = app.app.test_client()
+        res = client.post("/api/projects/p1/push-all", json={})
+        self.assertEqual(res.status_code, 200)
+        self.assertTrue(res.get_json()["success"])
+
+
+class TestRemoteCreationFixes(unittest.TestCase):
+
+    @patch("requests.get")
+    @patch("requests.post")
+    def test_create_github_repo_already_exists(self, mock_post, mock_get):
+        from gsm.api_utils import create_github_repo
+        # Post returns 422 name already exists
+        mock_post_resp = MagicMock()
+        mock_post_resp.status_code = 422
+        mock_post_resp.json.return_value = {
+            "message": "Repository creation failed.",
+            "errors": [{"message": "name already exists on this account"}]
+        }
+        mock_post.return_value = mock_post_resp
+
+        # Get user returns login
+        mock_user_resp = MagicMock()
+        mock_user_resp.status_code = 200
+        mock_user_resp.json.return_value = {"login": "testuser"}
+
+        # Get repo returns existing clone_url
+        mock_repo_resp = MagicMock()
+        mock_repo_resp.status_code = 200
+        mock_repo_resp.json.return_value = {"clone_url": "https://github.com/testuser/my-repo.git"}
+
+        mock_get.side_effect = [mock_user_resp, mock_repo_resp]
+
+        clone_url = create_github_repo("token123", "my-repo")
+        self.assertEqual(clone_url, "https://github.com/testuser/my-repo.git")
+
+    @patch("gsm.git_utils._run_git_lines")
+    @patch("gsm.git_utils._run_git")
+    def test_git_set_or_add_remote_when_origin_exists(self, mock_run, mock_lines):
+        from gsm.git_utils import git_set_or_add_remote
+        # Remote origin already exists in git remote listing
+        mock_run.return_value = MagicMock(returncode=0, stdout="origin\n")
+        mock_lines.return_value = {"success": True, "stdout": "", "stderr": ""}
+
+        res = git_set_or_add_remote("/fake/path", "origin", "https://github.com/user/repo.git")
+        self.assertTrue(res.get("success"))
+        # Should have called set-url, not add
+        mock_lines.assert_called_with(["remote", "set-url", "origin", "https://github.com/user/repo.git"], cwd="/fake/path")
+
+    @patch("gsm.git_utils._run_git_lines")
+    @patch("gsm.git_utils._run_git")
+    def test_git_set_or_add_remote_fallback_on_already_exists_error(self, mock_run, mock_lines):
+        from gsm.git_utils import git_set_or_add_remote
+        # Remote listing did not list it
+        mock_run.return_value = MagicMock(returncode=0, stdout="")
+        # First call to 'remote add' returns error 'remote origin already exists'
+        mock_lines.side_effect = [
+            {"success": False, "error": "fatal: remote origin already exists."},
+            {"success": True, "stdout": "", "stderr": ""}
+        ]
+
+        res = git_set_or_add_remote("/fake/path", "origin", "https://github.com/user/repo.git")
+        self.assertTrue(res.get("success"))
+        # Verify fallback set-url was called
+        self.assertEqual(mock_lines.call_count, 2)
+
+
 if __name__ == "__main__":
     unittest.main()
 

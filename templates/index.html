@@ -13,6 +13,9 @@
         <input type="text" class="search-input" v-model="searchQuery" placeholder="🔍 Tìm kiếm..." @input="filterProjects">
     </div>
     <div class="topbar-right">
+        <button class="btn btn-sm" :class="settings.has_github_token ? 'btn-secondary' : 'btn-outline-warning'" @click="openSettingsTab('services')" :title="settings.has_github_token ? 'GitHub: Đã kết nối Token (Bấm để xem/quản lý)' : 'Chưa kết nối GitHub - Bấm để kết nối ngay'">
+            🐙 <span>[[ settings.has_github_token ? 'GitHub: Đã kết nối' : 'Kết nối GitHub' ]]</span>
+        </button>
         <button class="btn btn-icon" @click="refreshAll" title="Làm mới">⟳</button>
         <button class="btn btn-icon" @click="openSettings" title="Cài đặt">⚙</button>
     </div>
@@ -163,8 +166,10 @@
             </div>
             <div v-if="githubLoading" class="status-clean">⏳ Đang tải repository từ GitHub...</div>
             <div v-else-if="githubError" class="status-clean" style="color:var(--red)">⚠️ [[ githubError ]]</div>
-            <div v-else-if="!settings.has_github_token" class="status-clean">
-                Chưa cấu hình GitHub token. Vui lòng vào <strong>⚙️ Cài đặt</strong> để nhập token.
+            <div v-else-if="!settings.has_github_token" class="status-clean" style="padding: 30px 16px; text-align: center;">
+                <div style="font-size: 15px; margin-bottom: 12px; color: var(--text-primary);">⚠️ Bạn chưa cấu hình GitHub Personal Access Token (PAT).</div>
+                <p style="color: var(--text-muted); font-size: 13px; margin-bottom: 16px;">Vui lòng kết nối tài khoản GitHub để duyệt, clone và quản lý repository trực tuyến.</p>
+                <button class="btn btn-primary" @click="openSettingsTab('services')">🐙 Kết nối GitHub ngay</button>
             </div>
             <div v-else-if="filteredGithubRepos.length === 0" class="status-clean">Không tìm thấy repo GitHub nào.</div>
             <div v-else class="repo-grid">
@@ -227,6 +232,9 @@
                     </div>
                 </div>
                 <div class="repo-header-actions">
+                    <button v-if="!hasGithubRemote" class="btn btn-primary" @click="openCreateRemoteModal('github')" title="Tạo repository trên GitHub và kết nối với dự án này" style="display:inline-flex;align-items:center;gap:6px">
+                        🐙 Tạo Repo GitHub
+                    </button>
                     <button class="btn btn-primary" @click="openInFork" :disabled="!settings.fork_path">🔓 Fork</button>
                     <button class="btn btn-secondary" @click="createPullRequest" :disabled="!selectedProject.github_remote && !selectedProject.gitea_remote" title="Tạo Pull Request trên GitHub/Gitea">🔀 Tạo PR</button>
                     <button class="btn btn-danger" @click="deleteProject">🗑 Xóa</button>
@@ -248,8 +256,11 @@
 
             <!-- GitHub-style action bar -->
             <div v-if="isGitRepo" class="action-bar">
-                <button class="abtn" @click="executePull" :disabled="syncing">⬇️ Kéo về</button>
-                <button class="abtn" @click="executePush" :disabled="syncing">⬆️ Đẩy lên</button>
+                <button class="abtn" @click="executePull" :disabled="syncing" title="Kéo code từ remote về local (git pull)">⬇️ Kéo về</button>
+                <button class="abtn" @click="executePush()" :disabled="syncing" title="Đẩy nhánh hiện tại lên remote (git push)">⬆️ Đẩy lên</button>
+                <button class="abtn" @click="executePushAll" :disabled="syncing" title="Đẩy toàn bộ nhánh & tags lên tất cả các kho lưu trữ (GitHub, Gitea / NAS)" style="color: #93c5fd; font-weight: 600; border-color: rgba(147, 197, 253, 0.4);">
+                    🚀 Đẩy lên tất cả
+                </button>
                 <button class="abtn" @click="projectMainTab = 'changes'; showCommitPanel = true">💾 Lưu commit</button>
                 <button class="abtn" @click="projectMainTab = 'branches'; refreshBranches()">🌿 Quản lý nhánh</button>
                 <button class="abtn" @click="executeFetch" :disabled="syncing">📥 Lấy về</button>
@@ -266,17 +277,34 @@
                 <div class="remote-row" v-for="(url, name) in remoteMap" :key="name">
                     <span class="remote-label">[[ name ]]:</span>
                     <input type="text" class="form-input mono remote-input" :value="url" @change="updateRemoteUrl(name, $event.target.value)">
-                    <button class="btn btn-xs" @click="copyText(url)">📋</button>
-                    <button class="btn btn-xs btn-danger" @click="removeRemoteByName(name)">🗑</button>
+                    <button class="btn btn-xs" @click="copyText(url)" title="Sao chép URL">📋</button>
+                    <button class="btn btn-xs btn-danger" @click="removeRemoteByName(name)" title="Xoá remote này">🗑</button>
                 </div>
-                <div v-if="Object.keys(remoteMap).length === 0" class="remote-empty">
+                <div style="display:flex;gap:8px;margin-top:8px;flex-wrap:wrap;align-items:center">
+                    <button class="btn btn-primary btn-xs" @click="executePushAll" :disabled="syncing" title="Đẩy toàn bộ nhánh & tags lên tất cả các kho lưu trữ" style="display:inline-flex;align-items:center;gap:4px">
+                        🚀 Đẩy lên tất cả
+                    </button>
+                    <button v-if="!hasGithubRemote" class="btn btn-primary btn-xs" @click="openCreateRemoteModal('github')" style="display:inline-flex;align-items:center;gap:4px">
+                        🐙 Tạo Repo GitHub
+                    </button>
+                    <button v-if="!hasGiteaRemote" class="btn btn-secondary btn-xs" @click="openCreateRemoteModal('gitea')" style="display:inline-flex;align-items:center;gap:4px">
+                        ☕ Tạo Repo Gitea
+                    </button>
+                    <button class="btn btn-secondary btn-xs" @click="showAddRemoteInput = !showAddRemoteInput" style="display:inline-flex;align-items:center;gap:4px">
+                        [[ showAddRemoteInput ? '✖ Đóng' : '＋ Thêm Remote Thủ Công' ]]
+                    </button>
+                </div>
+                <div v-if="showAddRemoteInput" class="input-row" style="margin-top:8px">
+                    <input type="text" v-model="newRemoteUrl" class="form-input mono" placeholder="URL git (https://...)" style="flex:1">
+                    <input type="text" v-model="newRemoteName" class="form-input" placeholder="tên (vd: github)" style="width:100px">
+                    <button class="btn btn-primary btn-sm" @click="addRemote">＋ Thêm</button>
+                </div>
+                <div v-if="Object.keys(remoteMap).length === 0" class="remote-empty" style="margin-top:8px">
                     <div style="margin-bottom:8px">🔗 Chưa có remote</div>
                     <div style="display:flex;gap:6px;margin-bottom:8px;flex-wrap:wrap">
-                        <button class="btn btn-primary btn-sm" @click="createAndPushRemote('github')" :disabled="creatingRemote" v-if="settings.has_github_token">[[ creatingRemote === 'github' ? '⏳...' : '⬆️ GitHub' ]]</button>
-                        <button class="btn btn-primary btn-sm" @click="createAndPushRemote('gitea')" :disabled="creatingRemote" v-if="settings.has_gitea_token">[[ creatingRemote === 'gitea' ? '⏳...' : '☕ Gitea' ]]</button>
-                        <button class="btn btn-secondary btn-sm" @click="createAndPushRemote('both')" :disabled="creatingRemote" v-if="settings.has_github_token && settings.has_gitea_token">[[ creatingRemote === 'both' ? '⏳...' : '🔗 Cả hai' ]]</button>
+                        <button class="btn btn-primary btn-sm" @click="openCreateRemoteModal('github')">🐙 Tạo Repo GitHub</button>
+                        <button class="btn btn-primary btn-sm" @click="openCreateRemoteModal('gitea')">☕ Tạo Repo Gitea</button>
                     </div>
-                    <div class="input-row"><input type="text" v-model="newRemoteUrl" class="form-input mono" placeholder="URL" style="flex:1"><input type="text" v-model="newRemoteName" class="form-input" placeholder="tên" style="width:70px"><button class="btn btn-secondary btn-sm" @click="addRemote">＋</button></div>
                 </div>
             </div>
 
@@ -1209,4 +1237,5 @@
 
 {% include "partials/add_modal.html" %}
 {% include "partials/settings_modal.html" %}
+{% include "partials/create_remote_modal.html" %}
 {% endblock %}

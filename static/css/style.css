@@ -61,6 +61,10 @@ body { font-family: var(--font); background: var(--bg-primary); color: var(--tex
 .btn-close:hover { color: var(--text-primary); }
 .btn-link { background: none; border: none; color: var(--accent); cursor: pointer; font-size: 13px; padding: 2px 4px; }
 .btn-link:hover { text-decoration: underline; }
+.btn-outline-warning { background: rgba(250,204,21,0.12); color: var(--yellow); border: 1px solid rgba(250,204,21,0.4); }
+.btn-outline-warning:hover:not(:disabled) { background: rgba(250,204,21,0.25); border-color: var(--yellow); }
+.btn-outline-primary { background: rgba(124,92,252,0.12); color: var(--accent); border: 1px solid rgba(124,92,252,0.4); }
+.btn-outline-primary:hover:not(:disabled) { background: rgba(124,92,252,0.25); border-color: var(--accent); }
 
 /* ─── Main Layout ─── */
 .main-layout { display: flex; height: calc(100vh - 56px); }
@@ -146,6 +150,10 @@ body { font-family: var(--font); background: var(--bg-primary); color: var(--tex
 .abtn { background: none; border: 1px solid var(--border); border-radius: 6px; padding: 6px 14px; color: var(--text-secondary); cursor: pointer; font-size: 12px; font-weight: 500; transition: all 0.15s; }
 .abtn:hover:not(:disabled) { background: var(--bg-hover); color: var(--text-primary); border-color: var(--accent); }
 .abtn:disabled { opacity: 0.5; cursor: not-allowed; }
+.abtn-success { border-color: rgba(74,222,128,0.4); color: var(--green); }
+.abtn-success:hover:not(:disabled) { background: rgba(74,222,128,0.15); border-color: var(--green); color: #fff; }
+.abtn-danger { border-color: rgba(248,113,113,0.3); color: var(--red); }
+.abtn-danger:hover:not(:disabled) { background: rgba(248,113,113,0.15); border-color: var(--red); }
 .abtn-info { font-size: 11px; color: var(--text-muted); padding: 6px 8px; }
 
 /* ─── Git Status Bar ─── */

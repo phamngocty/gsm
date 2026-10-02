@@ -21,10 +21,10 @@ from gsm.git_utils import (
     is_git_repo, get_status, get_recent_commits, clone_repo,
     open_in_fork, setup_multi_push,
     git_init, git_stage_file, git_unstage_file, git_stage_all, git_stage_all_progress,
-    git_commit, git_push, git_pull, git_fetch, git_push_tag, git_unlock, git_check_index_lock,
+    git_commit, git_push, git_push_all, git_pull, git_fetch, git_push_tag, git_unlock, git_check_index_lock,
     git_branch_list, git_branch_create, git_branch_delete, git_branch_switch, git_branch_rename,
     git_merge, git_stash_push, git_stash_pop, git_stash_list, git_stash_drop,
-    git_log_detailed, git_diff, git_remote_list, git_remote_add, git_remote_remove,
+    git_log_detailed, git_diff, git_remote_list, git_remote_add, git_remote_remove, git_set_or_add_remote,
     git_reset, git_tag_list, git_tag_create, git_tag_delete,
     git_init, git_custom_command, git_tree, git_read_file, git_log_graph,
     git_archive_zip, git_diff_parsed, git_resolve_conflict,
@@ -137,9 +137,9 @@ def api_create_project():
 
     try:
         if github_url and gitea_url: setup_multi_push(full_path, github_url, gitea_url)
-        elif github_url: _run_simple_git(full_path, "remote", "add", "origin", github_url)
-        elif gitea_url: _run_simple_git(full_path, "remote", "add", "origin", gitea_url)
-    except RuntimeError: pass
+        elif github_url: git_set_or_add_remote(full_path, "origin", github_url)
+        elif gitea_url: git_set_or_add_remote(full_path, "origin", gitea_url)
+    except Exception: pass
 
     project = {"id": _new_id(), "name": name, "path": full_path,
                "github_remote": github_url or "", "gitea_remote": gitea_url or "", "created_at": _now_iso()}
@@ -386,6 +386,38 @@ def api_setup_multipush(project_id):
     except RuntimeError as e: return jsonify({"error": str(e)}), 500
 
 
+@app.route("/api/projects/<project_id>/push-all", methods=["POST"])
+def api_push_all(project_id):
+    project = _find_project(project_id)
+    if not project: return jsonify({"error": "Không tìm thấy"}), 404
+    path = project.get("path", "")
+    if not path or not os.path.isdir(path): return jsonify({"error": "Thư mục không tồn tại"}), 400
+    if not is_git_repo(path): return jsonify({"error": "Chưa phải git repo"}), 400
+
+    # Ensure multi-push is configured with token if project has both remotes
+    github_url = project.get("github_remote", "")
+    gitea_url = project.get("gitea_remote", "")
+    if not github_url or not gitea_url:
+        existing_remotes = git_remote_list(path)
+        for rm in existing_remotes:
+            u = rm.get("url", "")
+            if "github.com" in u and not github_url:
+                github_url = u
+            elif ("gitea" in u or ":3002" in u or "nas152" in u) and not gitea_url:
+                gitea_url = u
+
+    if github_url and gitea_url:
+        try:
+            setup_multi_push(path, github_url, gitea_url)
+        except Exception as e_mp:
+            log.warning(f"setup_multi_push error in push_all: {e_mp}")
+
+    data = request.get_json(silent=True) or {}
+    force = data.get("force", False)
+    res = git_push_all(path, force=force)
+    return jsonify(res), (200 if res.get("success") else 400)
+
+
 # ═══════════════════════════════════════════════════════════════════════════
 #  API: GIT COMMANDS (generic)
 # ═══════════════════════════════════════════════════════════════════════════
@@ -421,6 +453,7 @@ def api_git_command(project_id, cmd):
         "stage_all":     lambda: _git_result(git_stage_all(path)),
         "commit":        lambda: _git_result(git_commit(path, data.get("message", ""))),
         "push":          lambda: _git_result(git_push(path, data.get("remote", "origin"), data.get("branch", ""), data.get("force", False))),
+        "push_all":      lambda: _git_result(git_push_all(path, data.get("force", False))),
         "pull":          lambda: _git_result(git_pull(path, data.get("remote", "origin"), data.get("branch", ""))),
         "fetch":         lambda: _git_result(git_fetch(path, data.get("remote", ""))),
         "unlock":        lambda: _git_result(git_unlock(path)),
@@ -551,18 +584,14 @@ def api_create_remote(project_id):
         if not github_url and not gitea_url:
             return jsonify({"error": f"Không tạo được repo nào: {'; '.join(errors)}"}), 500
 
-        from gsm.git_utils import setup_multi_push, _run_git
-        try:
-            _run_git(["remote", "add", "origin", github_url or gitea_url], cwd=path)
-        except:
-            pass
+        from gsm.git_utils import setup_multi_push, git_set_or_add_remote
         if github_url and gitea_url:
             try: setup_multi_push(path, github_url, gitea_url)
             except: pass
         elif github_url:
-            _run_simple_git_result(path, "remote", "set-url", "origin", github_url)
+            git_set_or_add_remote(path, "origin", github_url)
         elif gitea_url:
-            _run_simple_git_result(path, "remote", "set-url", "origin", gitea_url)
+            git_set_or_add_remote(path, "origin", gitea_url)
 
         projects = load_projects()
         for p in projects:
@@ -577,24 +606,42 @@ def api_create_remote(project_id):
         return jsonify({"success": True, "message": msg, "github_url": github_url, "gitea_url": gitea_url})
 
     # ── Single platform ───────────────────────────────────────────────────
+    from gsm.git_utils import git_remote_list, setup_multi_push, git_push, git_set_or_add_remote
+    existing_remotes = git_remote_list(path)
+    remote_names = [rm["name"] for rm in existing_remotes]
+    origin_remote = next((rm for rm in existing_remotes if rm["name"] == "origin"), None)
+
     if platform == "github":
         token = get_token("github_token")
-        if not token: return jsonify({"error": "Chưa cấu hình GitHub token"}), 400
+        if not token: return jsonify({"error": "Chưa cấu hình GitHub token. Hãy vào ⚙️ Cài đặt -> Dịch vụ & Token để lưu Token."}), 400
         clone_url = create_github_repo(token, name, description, private, auto_init=False)
-        if not clone_url: return jsonify({"error": "Tạo GitHub repo thất bại"}), 500
+        if not clone_url: return jsonify({"error": "Tạo GitHub repo thất bại. Hãy kiểm tra lại kết nối mạng hoặc quyền của Token."}), 500
+
+        # Nếu origin đã tồn tại và là Gitea/NAS
+        if origin_remote and ("gitea" in origin_remote["url"].lower() or "3002" in origin_remote["url"] or "nas152" in origin_remote["url"].lower() or "192.168." in origin_remote["url"]):
+            try:
+                setup_multi_push(path, clone_url, origin_remote["url"])
+            except Exception:
+                git_set_or_add_remote(path, "github", clone_url)
+        else:
+            git_set_or_add_remote(path, "origin", clone_url)
+
     elif platform == "gitea":
         token = get_token("gitea_token")
         server_url = settings.get("gitea_server_url", "")
-        if not token or not server_url: return jsonify({"error": "Chưa cấu hình Gitea"}), 400
+        if not token or not server_url: return jsonify({"error": "Chưa cấu hình Gitea trong Cài đặt"}), 400
         clone_url = create_gitea_repo(token, server_url, name, description, private, auto_init=False)
-        if not clone_url: return jsonify({"error": "Tạo Gitea repo thất bại"}), 500
+        if not clone_url: return jsonify({"error": "Tạo Gitea repo thất bại. Hãy kiểm tra URL máy chủ hoặc Token."}), 500
+
+        if origin_remote and "github" in origin_remote["url"].lower():
+            try:
+                setup_multi_push(path, origin_remote["url"], clone_url)
+            except Exception:
+                git_set_or_add_remote(path, "gitea", clone_url)
+        else:
+            git_set_or_add_remote(path, "origin", clone_url)
     else:
         return jsonify({"error": "Platform phải là 'github', 'gitea' hoặc 'both'"}), 400
-
-    r = _run_simple_git_result(path, "remote", "add", "origin", clone_url)
-    if not r.get("success"):
-        r = _run_simple_git_result(path, "remote", "set-url", "origin", clone_url)
-        if not r.get("success"): return jsonify({"error": f"Set remote thất bại: {r.get('stderr', '')}"}), 500
 
     projects = load_projects()
     for p in projects:
@@ -603,7 +650,21 @@ def api_create_remote(project_id):
             elif platform == "gitea": p["gitea_remote"] = clone_url
             break
     save_projects(projects)
-    return jsonify({"success": True, "message": f"Đã tạo remote {platform}", "clone_url": clone_url})
+
+    # Tự động push nếu có yêu cầu
+    push_msg = ""
+    if data.get("push_now", False):
+        try:
+            push_res = git_push(path)
+            if not push_res.get("success"):
+                push_err = (push_res.get("error") or push_res.get("stderr") or "").strip()
+                if push_err:
+                    push_msg = f" (Đẩy code gặp lỗi: {push_err})"
+        except Exception as e_push:
+            log.warning(f"Push after create remote error: {e_push}")
+            push_msg = f" (Không thể tự động đẩy: {e_push})"
+
+    return jsonify({"success": True, "message": f"Đã kết nối repo trên {platform} thành công!{push_msg}", "clone_url": clone_url})
 
 
 def _run_simple_git_result(cwd: str, *args: str) -> dict:

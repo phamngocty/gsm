@@ -1,0 +1,45 @@
+<!-- Modal Tạo Repo Trên GitHub / Gitea -->
+<div class="modal-overlay" :class="{ visible: showCreateRemoteModal }" @click.self="showCreateRemoteModal = false">
+    <div class="modal" style="max-width: 520px;">
+        <div class="modal-header">
+            <h2>[[ createRemotePlatform === 'github' ? '🐙 Tạo Repository Trên GitHub' : '☕ Tạo Repository Trên Gitea' ]]</h2>
+            <button class="btn-close" @click="showCreateRemoteModal = false">✖</button>
+        </div>
+        <div style="padding: 16px;">
+            <p style="font-size: 13px; color: var(--text-secondary); margin-bottom: 14px; line-height: 1.5;">
+                Tự động tạo một kho lưu trữ mới trên <strong>[[ createRemotePlatform === 'github' ? 'GitHub' : 'Gitea' ]]</strong> và kết nối với dự án này (hỗ trợ đẩy code song song lên cả NAS và GitHub).
+            </p>
+
+            <div class="form-group">
+                <label>Tên Repository *</label>
+                <input type="text" v-model="createRemoteName" class="form-input" placeholder="Ví dụ: Tdriver">
+            </div>
+
+            <div class="form-group">
+                <label>Mô tả (Tùy chọn)</label>
+                <input type="text" v-model="createRemoteDesc" class="form-input" placeholder="Mô tả dự án...">
+            </div>
+
+            <div class="form-group">
+                <label class="checkbox-label" style="cursor: pointer;">
+                    <input type="checkbox" v-model="createRemotePrivate">
+                    <span>🔒 Chế độ riêng tư (Private repository)</span>
+                </label>
+            </div>
+
+            <div class="form-group">
+                <label class="checkbox-label" style="cursor: pointer; color: var(--accent); font-weight: 600;">
+                    <input type="checkbox" v-model="createRemotePushNow">
+                    <span>🚀 Tự động đẩy (Push) toàn bộ mã nguồn lên sau khi tạo</span>
+                </label>
+            </div>
+
+            <div style="display: flex; gap: 8px; margin-top: 18px;">
+                <button class="btn btn-secondary" style="flex: 1;" @click="showCreateRemoteModal = false" :disabled="creatingRemoteLoading">Hủy</button>
+                <button class="btn btn-primary" style="flex: 2;" @click="submitCreateRemote" :disabled="creatingRemoteLoading || !createRemoteName.trim()">
+                    [[ creatingRemoteLoading ? '⏳ Đang tạo repo...' : '🚀 Tạo Repo & Kết Nối' ]]
+                </button>
+            </div>
+        </div>
+    </div>
+</div>
